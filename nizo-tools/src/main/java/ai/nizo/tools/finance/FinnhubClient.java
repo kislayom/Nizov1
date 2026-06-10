@@ -32,6 +32,7 @@ import java.time.Duration;
  *   /stock/recommendation?symbol=…&token=…
  *   /stock/earnings?symbol=…&token=…
  *   /stock/insider-transactions?symbol=…&token=…
+ *   /company-news?symbol=…&from=…&to=…&token=…
  * </pre>
  *
  * <p>Each method returns either a {@link JsonNode} on success or {@code null} on any
@@ -97,6 +98,20 @@ public final class FinnhubClient {
     public JsonNode insiderTransactions(String symbol) {
         if (!isEnabled() || symbol == null || symbol.isBlank()) return null;
         return getJson("/stock/insider-transactions?symbol=" + URLEncoder.encode(symbol, StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Company news between two ISO dates (inclusive). Array, newest first:
+     * {@code [{datetime(unix s),headline,source,summary,url,category,related}, …]}.
+     * Free tier covers ~1 year of history for US-listed symbols; international
+     * coverage (NSE/BSE/…) is spottier — callers should fall back to web search
+     * when this comes back null or empty.
+     */
+    public JsonNode companyNews(String symbol, String fromIso, String toIso) {
+        if (!isEnabled() || symbol == null || symbol.isBlank()) return null;
+        return getJson("/company-news?symbol=" + URLEncoder.encode(symbol, StandardCharsets.UTF_8)
+                + "&from=" + URLEncoder.encode(fromIso, StandardCharsets.UTF_8)
+                + "&to=" + URLEncoder.encode(toIso, StandardCharsets.UTF_8));
     }
 
     /** Single HTTP GET → JsonNode, or null on any failure. Adds the auth token. */

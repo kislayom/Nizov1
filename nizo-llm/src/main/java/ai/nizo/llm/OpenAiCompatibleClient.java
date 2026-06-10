@@ -229,6 +229,13 @@ public final class OpenAiCompatibleClient implements LlmClient {
         ObjectNode root = mapper.createObjectNode();
         root.put("model", request.model());
         root.put("stream", stream);
+        // Without this, llama.cpp (and OpenAI/vLLM) omit token usage from streamed
+        // responses entirely — which is why turn logs showed ptok=0 ctok=0 for every
+        // streaming chat. The usage arrives in a final chunk with an empty choices
+        // array; the parse loop above already handles it.
+        if (stream) {
+            root.putObject("stream_options").put("include_usage", true);
+        }
         if (request.temperature() != null) root.put("temperature", request.temperature());
         if (request.maxTokens() != null) root.put("max_tokens", request.maxTokens());
 

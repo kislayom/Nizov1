@@ -146,6 +146,7 @@ public final class Bootstrap implements AutoCloseable {
                 .add(measure.apply(new TechnicalIndicatorsTool(historicalPriceTool)))
                 .add(measure.apply(new StockFundamentalsTool(yahooQs, screenerInClient)))  // 4y financial statements + key stats
                 .add(measure.apply(new AnalystRatingsTool(yahooQs)))      // sell-side consensus + price targets
+                .add(measure.apply(new ai.nizo.tools.finance.StockNewsTool()))  // company news via Finnhub API (no scraping)
                 .add(measure.apply(new InsiderActivityTool(yahooQs)))     // insider buys/sells
                 .add(measure.apply(new EarningsHistoryTool(yahooQs)))     // beat/miss + next reporting date
                 .add(measure.apply(buffettScoreTool))                     // Buffett-Munger 0-100 scorecard (no LLM)
