@@ -1,0 +1,26 @@
+# Local-Mac LongMemEval bench config — qwen2.5:14b on M3 Pro CPU.
+# Used to validate Wave-1+2 changes on the same LLM that gave us the
+# 60.4% baseline (see bench/lme-oracle-48-v3.json), without burning
+# server WoL + boot time for a quick iteration.
+#
+# Extraction OFF for the first smoke pass; raw remember beats extraction
+# on smaller LLMs (we proved this previously).
+
+storage: { backend: sqlite, path: /tmp/nizo-longmemeval-local.db }
+vector: { backend: inmemory }
+embedder:
+  enabled: true
+  backend: ollama
+  ollama: { base_url: http://localhost:11434, model: nomic-embed-text, timeout_seconds: 60 }
+extraction: { enabled: false, backend: none }
+consolidation: { enabled: false, consolidate_every_n: 999999, backend: none }
+compaction: { enabled: false, backend: none }
+verifier: { enabled: false }
+graph: { enabled: true }
+recall:
+  default_token_budget: 1500
+  confidence_floor: 0.0
+  min_similarity_floor: 0.55
+  min_top_score: 0.55
+server: { port: 8767, threads: 4 }
+reflection: { enabled: false, tick_interval_minutes: 999999, backend: none }

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# llama-switch — swap between standard and MTP llama-server modes.
+#
+# Both modes share the same model weights on disk (page cache keeps them warm
+# in RAM after first load → 2nd switch is ~5s instead of cold-start ~30s).
+# Only ONE service may hold the GPU at a time — systemd's Conflicts=
+# declaration enforces this at the unit level; the VRAM constraint forces it
+# at the hardware level.
+#
+# Usage:
+#   llama-switch standard   # Q8 + mmproj on :8080 (vision, parallel=3, 256K ctx)
+#   llama-switch mtp        # MTP on :8080 (no vision, parallel=1, 64K ctx, ~1.65x decode)
+#   llama-switch status     # show which model is currently serving :8080
+#   llama-switch off        # stop both (free GPU for YuE etc.)
+#   llama-switch toggle     # swap whichever is active to the other
+#
+# Both services bind :8080 and are mutually exclusive (Conflicts= at systemd level
+# + VRAM constraint at the GPU level). nizo-app always points at :8080 so swap is
+# transparent — current chat sessions will reconnect on the next request.
+#
+# Notes:
+#   - Health-checks the target endpoint for up to 90s before returning.
+#   - Logs to journal under the respective service.
+#   - Exit code 0 on success, non-zero on health-check timeout.
+
+set -e
+
+usage() {
+  cat <<USAGE
+Usage: llama-switch [standard|mtp|status|off|toggle]
+  standard    Switch to Q8 + mmproj on :8080 (vision, multi-request, 256K ctx)
+  mtp         Switch to MTP on :8081 (single-request, 64K ctx, no vision, 1.5-2x faster decode)
+  status      Print which mode is currently active
+  off         Stop both — GPU free for YuE / other workloads
+  toggle      Swap to the inactive mode
+USAGE
+}
+
+is_active() { systemctl is-active --quiet "$1"; }
+
+wait_for_health() {
+  local url="$1" name="$2" timeout=90 start
+  start=$(date +%s)
+  while true; do
+    if curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null | grep -q '^200$'; then
+      echo "[$name] healthy on $url"
+      return 0
+    fi
+    if [ $(( $(date +%s) - start )) -gt $timeout ]; then
+      echo "[$name] health check timed out after ${timeout}s on $url" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+status() {
+  local std mtp
+  std=$(is_active nizo-llama       && echo "ACTIVE"  || echo "stopped")
+  mtp=$(is_active nizo-llama-mtp   && echo "ACTIVE"  || echo "stopped")
+  printf "  nizo-llama       (Q8 + mmproj, parallel=3, 256K ctx)  %s\n" "$std"
+  printf "  nizo-llama-mtp   (MTP draft-6, parallel=1, 64K ctx)   %s\n" "$mtp"
+  printf "  both serve :8080 — only one active at a time.\n"
+}
+
+case "${1:-}" in
+  standard)
+    sudo systemctl stop  nizo-llama-mtp 2>/dev/null || true
+    sudo systemctl start nizo-llama
+    wait_for_health http://localhost:8080/health nizo-llama
+    status
+    ;;
+  mtp)
+    if [ ! -f /mnt/ai-models/qwen3.6-27b/mtp/Qwen3.6-27B-UD-Q8_K_XL.gguf ]; then
+      echo "MTP weights not found at /mnt/ai-models/qwen3.6-27b/mtp/Qwen3.6-27B-UD-Q8_K_XL.gguf" >&2
+      echo "Download first: hf download unsloth/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-UD-Q8_K_XL.gguf --local-dir /mnt/ai-models/qwen3.6-27b/mtp" >&2
+      exit 2
+    fi
+    sudo systemctl stop  nizo-llama 2>/dev/null || true
+    sudo systemctl start nizo-llama-mtp
+    wait_for_health http://localhost:8080/health nizo-llama-mtp
+    status
+    ;;
+  off)
+    sudo systemctl stop nizo-llama nizo-llama-mtp 2>/dev/null || true
+    status
+    ;;
+  toggle)
+    if is_active nizo-llama;     then "$0" mtp;      exit $?; fi
+    if is_active nizo-llama-mtp; then "$0" standard; exit $?; fi
+    # Neither active — default to standard
+    "$0" standard
+    ;;
+  status|"")
+    status
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    echo "unknown command: $1" >&2
+    usage
+    exit 2
+    ;;
+esac

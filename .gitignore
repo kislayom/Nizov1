@@ -1,0 +1,43 @@
+# Build output
+target/
+*.class
+*.jar
+!**/lib/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local data (sqlite, runtime state)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets / env
+.env
+.env.local
+secrets/
+config-local/
+
+# Python venvs
+venv/
+.venv/
+__pycache__/
+
+# Maven
+dependency-reduced-pom.xml

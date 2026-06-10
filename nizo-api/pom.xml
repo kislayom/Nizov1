@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>ai.nizo</groupId>
+        <artifactId>nizo-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>nizo-api</artifactId>
+    <name>Nizo — API (interfaces and records)</name>
+    <description>Pure interfaces and value records. Zero runtime deps. The contract every other module talks to.</description>
+</project>

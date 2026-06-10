@@ -1,0 +1,133 @@
+# ============================================================================
+# nizo-memory configuration
+# ----------------------------------------------------------------------------
+# Single source of truth for the standalone memory service. Every section is
+# optional — anything you omit falls back to the defaults baked into
+# NizoConfig.defaults().
+#
+# Wire-protocol-style keys (snake_case) are what the YAML parser expects; the
+# Java records use camelCase via Jackson's SNAKE_CASE naming strategy.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# storage — episodic + semantic memory store (always enabled)
+#
+# Path tokens (expanded by ai.nizo.memory.util.DataPaths.resolve):
+#   ${user.data}  →  $HOME/.nizo            (default; survives reinstall)
+#   ~/something   →  $HOME/something
+#   /abs/path     →  used verbatim
+#   relative/x    →  resolved against CWD   (NOT recommended for production)
+#
+# The default lands in $HOME/.nizo/memory.db so the JAR can be uninstalled
+# and reinstalled without losing a single fact, graph edge, or seeded
+# world-knowledge heuristic.
+# ---------------------------------------------------------------------------
+storage:
+  backend: sqlite                  # only sqlite for now
+  path: ${user.data}/memory.db     # → ~/.nizo/memory.db
+
+# ---------------------------------------------------------------------------
+# vector — vector index for semantic recall
+# ---------------------------------------------------------------------------
+vector:
+  backend: inmemory                # inmemory only (qdrant planned)
+
+# ---------------------------------------------------------------------------
+# embedder — turns text into vectors so recall can find semantically related
+# items even when the query doesn't share keywords. Disable to fall back to
+# pure FTS / BM25 retrieval.
+# ---------------------------------------------------------------------------
+embedder:
+  enabled: true
+  backend: ollama                  # ollama | onnx | none
+  ollama:
+    base_url: http://localhost:11434
+    model: nomic-embed-text        # 768-dim
+    timeout_seconds: 30
+  onnx:
+    model_dir: models/all-MiniLM-L6-v2
+    max_seq_len: 128
+
+# ---------------------------------------------------------------------------
+# extraction — structured fact extraction from raw user messages. Routes the
+# results to the knowledge graph + semantic memory.
+# ---------------------------------------------------------------------------
+extraction:
+  enabled: true
+  backend: ollama                  # ollama | none
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:14b
+    temperature: 0.1
+    timeout_seconds: 60
+
+# ---------------------------------------------------------------------------
+# consolidation — periodic summariser that turns clusters of episodic events
+# into stable semantic facts. Triggered every N remember() calls.
+# ---------------------------------------------------------------------------
+consolidation:
+  enabled: true
+  consolidate_every_n: 12
+  backend: ollama
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:14b
+
+# ---------------------------------------------------------------------------
+# compaction — mid-session context compression. The agent calls this when the
+# transcript grows past its context window; the summary replaces the raw
+# messages.
+# ---------------------------------------------------------------------------
+compaction:
+  enabled: true
+  backend: ollama
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:14b
+  reserve_buffer_tokens: 13000     # headroom kept free of recalled facts
+
+# ---------------------------------------------------------------------------
+# verifier — self-healing fact check. Runs each top-k recall through a small
+# model that classifies each fact as CONFIRMED / OUTDATED / UNVERIFIABLE
+# before it enters the prompt. OFF by default — adds latency.
+# ---------------------------------------------------------------------------
+verifier:
+  enabled: false
+  backend: ollama
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:3b
+  max_facts_to_verify: 5
+  outdated_penalty: 0.2            # multiplier; <floor → fact dropped
+  unverifiable_penalty: 0.7
+
+# ---------------------------------------------------------------------------
+# graph — knowledge graph (entity resolution + 1-hop traversal in recall).
+# ---------------------------------------------------------------------------
+graph:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# recall — defaults applied when a recall request omits these fields.
+#
+# min_similarity_floor: vector cosine threshold below which a hit counts as
+# noise. Calibrated for the embedder you choose:
+#   - nomic-embed-text: ~0.45 (recommended; below this is unrelated content)
+#   - all-MiniLM-L6-v2 ONNX: ~0.35
+#   - FakeEmbedder (tests only): 0.01
+# Items below the floor are excluded from user-facing recall UNLESS they
+# also hit FTS / tag / graph channels. PROCEDURAL items bypass this floor
+# entirely (routed through recallProcedural() for extraction guardrails).
+# ---------------------------------------------------------------------------
+recall:
+  default_token_budget: 1200
+  confidence_floor: 0.1
+  min_similarity_floor: 0.55   # per-item noise floor (unrelated below this)
+  min_top_score: 0.55          # whole-query gate: if top result < this, return empty
+
+# ---------------------------------------------------------------------------
+# server — HTTP listener.
+# ---------------------------------------------------------------------------
+server:
+  port: 8765
+  threads: 8

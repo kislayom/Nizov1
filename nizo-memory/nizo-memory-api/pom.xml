@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>ai.nizo.memory</groupId>
+        <artifactId>nizo-memory-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>nizo-memory-api</artifactId>
+    <name>Nizo Memory :: API</name>
+    <!-- Zero implementation dependencies — pure interfaces and records -->
+</project>

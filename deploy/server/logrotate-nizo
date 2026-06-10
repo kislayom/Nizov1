@@ -1,0 +1,31 @@
+# Nizo log rotation. Install on the server with:
+#   sudo ln -s /home/kislay/nizo_v1/deploy/server/logrotate-nizo /etc/logrotate.d/nizo
+#
+# llama-server appends to the log forever (the systemd unit doesn't intercept
+# stdout — the script redirects via >> inside serve_llamacpp.sh). Without
+# rotation this file grows past 10GB on a busy week.
+
+/mnt/ai-models/qwen3.6-27b/logs/llama-serve.log {
+    daily
+    rotate 7
+    maxsize 500M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    dateext
+    dateformat -%Y%m%d
+}
+
+# Voice sidecar + nizo-app log to systemd journal by default; if the operator
+# diverts them to files via StandardOutput=, those need rotation here too.
+/tmp/nizo-ui.log /tmp/voice-sidecar.log {
+    weekly
+    rotate 4
+    maxsize 100M
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

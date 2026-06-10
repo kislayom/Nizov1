@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  nizo.ai main logo — 750 x 450 (5:3 landscape lockup).
+  Mark on the left (3-node KG forming an "n"); wordmark on the right.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="750" height="450" viewBox="0 0 750 450"
+     font-family="Inter, -apple-system, ui-sans-serif, system-ui, sans-serif">
+
+  <!-- transparent background; swap this rect's fill if you need solid white -->
+  <rect width="750" height="450" fill="#FFFFFF"/>
+
+  <!-- ============== centered lockup group ============== -->
+  <g transform="translate(95,135)">
+
+    <!-- ============== mark: 3-node graph forming an 'n' ============== -->
+    <!-- bounding box ~180x180 -->
+    <g stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <!-- left leg -->
+      <line x1="30" y1="30" x2="30" y2="170" stroke="#0B1220" stroke-width="18"/>
+      <!-- arch -> right leg -->
+      <path d="M 30 60 Q 30 30 60 30 L 140 30 Q 170 30 170 60 L 170 170"
+            stroke="#0B1220" stroke-width="18"/>
+      <!-- accent edge: the 'active recall path' across the top -->
+      <line x1="50" y1="30" x2="150" y2="30" stroke="#22D3EE" stroke-width="18"/>
+    </g>
+    <!-- nodes -->
+    <circle cx="30"  cy="170" r="16" fill="#0B1220"/>
+    <circle cx="170" cy="170" r="16" fill="#0B1220"/>
+    <circle cx="100" cy="30"  r="20" fill="#22D3EE"/>
+
+    <!-- ============== wordmark ============== -->
+    <g transform="translate(230, 0)">
+      <text x="0"   y="135" font-size="150" font-weight="700"
+            letter-spacing="-5" fill="#0B1220">nizo</text>
+      <text x="358" y="135" font-size="150" font-weight="300"
+            letter-spacing="-3" fill="#22D3EE">.ai</text>
+      <!-- micro-tagline tracked under the wordmark -->
+      <text x="4" y="170" font-size="16" font-weight="500"
+            letter-spacing="8" fill="#94A3B8">MEMORY  FOR  AGENTS</text>
+    </g>
+  </g>
+
+</svg>

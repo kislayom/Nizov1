@@ -1,0 +1,33 @@
+[Unit]
+Description=Nizo voice sidecar — Whisper + XTTS + MMS on :7780
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kislay
+Group=kislay
+WorkingDirectory=/home/kislay/nizo_v1
+
+# CUDA + huggingface cache (model loads happen on first request)
+Environment=HF_HOME=/mnt/ai-models/caches/hf
+Environment=CUDA_HOME=/opt/cuda
+Environment=PATH=/opt/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+EnvironmentFile=-/home/kislay/.nizo/.env
+
+ExecStart=/mnt/ai-models/envs/voice/bin/python /home/kislay/nizo_v1/deploy/server/voice_sidecar.py
+
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Cap crashloop — model-load OOMs (XTTS, MusicGen-large) shouldn't thrash the GPU.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Voice sidecar can be hefty on first model load — give it a generous limit
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

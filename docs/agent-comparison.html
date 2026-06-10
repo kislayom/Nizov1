@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Agent Architectures: OpenClaw vs Hermes vs Nizo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg:        #0d1117;
+    --panel:     #161b22;
+    --panel-2:   #1c2129;
+    --border:    #2d333b;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --accent:    #58a6ff;
+    --ok:        #3fb950;
+    --warn:      #d29922;
+    --bad:       #f85149;
+    --openclaw:  #f78166;
+    --hermes:    #d2a8ff;
+    --nizo:      #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
+    padding: 24px 32px 80px;
+    max-width: 1180px; margin: 0 auto;
+  }
+  h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: -0.5px; }
+  h2 { font-size: 19px; margin: 36px 0 12px; padding-bottom: 6px;
+       border-bottom: 1px solid var(--border); letter-spacing: -0.2px; }
+  h3 { font-size: 15px; margin: 22px 0 8px; color: var(--text); letter-spacing: 0.2px; }
+  h4 { font-size: 13px; margin: 14px 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  p, li { color: var(--text); }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 0; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; font-size: 12.5px; }
+  pre  { background: var(--panel); border: 1px solid var(--border); padding: 12px;
+         border-radius: 6px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .meta { color: var(--muted); font-size: 12px; }
+
+  .pill {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.2px;
+    border: 1px solid var(--border); background: var(--panel-2);
+  }
+  .pill.openclaw { color: var(--openclaw); border-color: rgba(247,129,102,.4); }
+  .pill.hermes   { color: var(--hermes);   border-color: rgba(210,168,255,.4); }
+  .pill.nizo     { color: var(--nizo);     border-color: rgba(88,166,255,.4); }
+
+  /* TL;DR card */
+  .tldr {
+    border: 1px solid var(--border); background: var(--panel);
+    border-radius: 8px; padding: 18px 22px; margin-top: 16px;
+  }
+  .tldr h3 { margin-top: 0; }
+  .tldr ul { margin: 6px 0 0 0; padding-left: 18px; }
+  .tldr li { margin-bottom: 6px; }
+
+  /* 3-up grid */
+  .grid3 {
+    display: grid; gap: 14px;
+    grid-template-columns: 1fr 1fr 1fr;
+    margin: 16px 0;
+  }
+  @media (max-width: 980px) { .grid3 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px 18px;
+  }
+  .card.openclaw { border-top: 3px solid var(--openclaw); }
+  .card.hermes   { border-top: 3px solid var(--hermes); }
+  .card.nizo     { border-top: 3px solid var(--nizo); }
+  .card h3 { margin-top: 0; }
+  .card .desc { color: var(--muted); font-size: 13px; min-height: 38px; }
+  .card ul { padding-left: 18px; margin: 8px 0; }
+  .card li { margin: 4px 0; font-size: 13px; }
+
+  /* Architecture diagrams */
+  .arch {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px; margin: 12px 0;
+  }
+  .arch-title { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .arch-title h3 { margin: 0; }
+  .layer {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 10px 14px; margin: 8px 0; text-align: center;
+    font-size: 13px;
+  }
+  .layer.label { font-size: 11px; color: var(--muted); padding: 4px 10px; text-transform: uppercase; letter-spacing: 0.5px; background: transparent; border: 0; }
+  .layer-row { display: grid; gap: 8px; }
+  .layer-row.cols-2 { grid-template-columns: 1fr 1fr; }
+  .layer-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .layer-row.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .arrow {
+    text-align: center; color: var(--muted); font-size: 12px;
+    margin: 2px 0; user-select: none;
+  }
+  .accent-openclaw { border-left: 3px solid var(--openclaw); }
+  .accent-hermes   { border-left: 3px solid var(--hermes); }
+  .accent-nizo     { border-left: 3px solid var(--nizo); }
+
+  /* Comparison table */
+  table.cmp {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+    margin-top: 8px;
+  }
+  table.cmp th, table.cmp td {
+    border: 1px solid var(--border); padding: 9px 12px;
+    text-align: left; vertical-align: top;
+  }
+  table.cmp thead th {
+    background: var(--panel-2); color: var(--text); font-weight: 600;
+    position: sticky; top: 0;
+  }
+  table.cmp tbody tr:nth-child(odd) td { background: var(--panel); }
+  table.cmp tbody tr:nth-child(even) td { background: var(--bg); }
+  table.cmp .dim { color: var(--muted); font-weight: 600; }
+  table.cmp .yes { color: var(--ok); }
+  table.cmp .no  { color: var(--bad); }
+  table.cmp .partial { color: var(--warn); }
+
+  /* Decision matrix */
+  table.mat {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  table.mat th, table.mat td {
+    border: 1px solid var(--border); padding: 8px 10px; text-align: center;
+  }
+  table.mat th { background: var(--panel-2); }
+  table.mat td.dim { text-align: left; color: var(--muted); font-weight: 600; }
+  table.mat .score-5 { background: rgba(63,185,80,.15);  color: var(--ok); font-weight: 700; }
+  table.mat .score-4 { background: rgba(63,185,80,.08);  color: var(--ok); }
+  table.mat .score-3 { background: rgba(210,153,34,.08); color: var(--warn); }
+  table.mat .score-2 { background: rgba(248,81,73,.08);  color: var(--bad); }
+  table.mat .score-1 { background: rgba(248,81,73,.15);  color: var(--bad); font-weight: 700; }
+
+  ul.tight li { margin: 3px 0; }
+  ul.cta li::marker { color: var(--accent); }
+  .footnote { color: var(--muted); font-size: 12px; margin-top: 24px; }
+</style>
+</head>
+<body>
+
+<h1>Agent Architectures — OpenClaw · Hermes Agent · Nizo</h1>
+<p class="sub">CTO-level comparison · architecture, trade-offs, and where to plant the flag.</p>
+
+<!-- ============================================================ -->
+<!-- TL;DR -->
+<!-- ============================================================ -->
+<div class="tldr">
+  <h3>TL;DR</h3>
+  <ul>
+    <li><strong>OpenClaw</strong> = a <em>platform</em>. Skills + MCP + subagents. Cloud-LLM-shaped, dev-loop-optimized. Steal: skill format, MCP wiring, subagent isolation.</li>
+    <li><strong>Hermes Agent</strong> = a <em>kernel</em>. ~300 LOC of "while-loop with tool calls". Steal: loop shape, Hermes-2-Pro tool grammar.</li>
+    <li><strong>Nizo</strong> = a <em>product</em>. Plain Java, local-first, streaming-native, condense-aware, per-user memory. Owns its stack top-to-bottom.</li>
+    <li>Nizo's bet: a small surface that <em>composes</em> the strongest ideas from both, without inheriting the cloud-API or Python-ecosystem coupling.</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<!-- POSITIONING -->
+<!-- ============================================================ -->
+<h2>Positioning</h2>
+<div class="grid3">
+  <div class="card openclaw">
+    <h3><span class="pill openclaw">OpenClaw</span></h3>
+    <p class="desc">Claude-Code-style local agent for terminal devs. Skills as the unit of capability.</p>
+    <h4>Optimizes for</h4>
+    <ul>
+      <li>Dev inner-loop (file edit → test → iterate)</li>
+      <li>Skill reusability across projects</li>
+      <li>Multi-agent decomposition via Task tool</li>
+      <li>Cloud-LLM economics (Claude / OpenAI)</li>
+    </ul>
+    <h4>Pays cost in</h4>
+    <ul>
+      <li>Cloud-LLM dependence (price, latency, privacy)</li>
+      <li>TS/Python heterogeneity at runtime</li>
+    </ul>
+  </div>
+
+  <div class="card hermes">
+    <h3><span class="pill hermes">Hermes Agent</span></h3>
+    <p class="desc">Reference impl for Hermes-2-Pro tool-calling. Minimum viable agent loop.</p>
+    <h4>Optimizes for</h4>
+    <ul>
+      <li>Clarity — read it in 30 minutes</li>
+      <li>Distribution alignment with Hermes-2-Pro models</li>
+      <li>Acting as a substrate others build on</li>
+    </ul>
+    <h4>Pays cost in</h4>
+    <ul>
+      <li>No memory, no skills, no channels — DIY everything</li>
+      <li>Deliberately not a platform</li>
+    </ul>
+  </div>
+
+  <div class="card nizo">
+    <h3><span class="pill nizo">Nizo</span></h3>
+    <p class="desc">Production personal agent. Local Qwen3.6-27B, plain Java 21, owns the stack.</p>
+    <h4>Optimizes for</h4>
+    <ul>
+      <li>Local execution (data sovereignty, $0 marginal cost)</li>
+      <li>Cross-session, cross-channel persona via per-user memory</li>
+      <li>Streaming UX end-to-end (SSE, sealed events)</li>
+      <li>Long-horizon: condense + reflect + skills</li>
+    </ul>
+    <h4>Pays cost in</h4>
+    <ul>
+      <li>Single-GPU constraint shapes model choice</li>
+      <li>Build-everything-yourself cost (compensated by tight surface)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- ARCH: OpenClaw -->
+<!-- ============================================================ -->
+<h2>Architectures</h2>
+
+<div class="arch accent-openclaw">
+  <div class="arch-title"><span class="pill openclaw">OpenClaw</span><h3>Platform stack — skills + MCP + subagents</h3></div>
+  <div class="layer label">Surfaces</div>
+  <div class="layer-row cols-3">
+    <div class="layer">CLI <span class="meta">(claw)</span></div>
+    <div class="layer">TUI</div>
+    <div class="layer">IDE plugin</div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Orchestrator</div>
+  <div class="layer">Agent loop · plan → act → observe · subagents via <code>Task</code></div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Capability layer</div>
+  <div class="layer-row cols-4">
+    <div class="layer">Skills <span class="meta">(MD + YAML)</span></div>
+    <div class="layer">Tools <span class="meta">(Bash / Edit / Web)</span></div>
+    <div class="layer">MCP servers <span class="meta">(in &amp; out)</span></div>
+    <div class="layer">Hooks <span class="meta">(pre/post)</span></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Persistence</div>
+  <div class="layer-row cols-2">
+    <div class="layer">Session memory <span class="meta">(filesystem)</span></div>
+    <div class="layer">Workspace state</div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Model</div>
+  <div class="layer">Claude / OpenAI / Bedrock · cloud APIs · provider abstraction layer</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- ARCH: Hermes -->
+<!-- ============================================================ -->
+<div class="arch accent-hermes">
+  <div class="arch-title"><span class="pill hermes">Hermes Agent</span><h3>Kernel stack — single tight loop</h3></div>
+  <div class="layer label">Surface</div>
+  <div class="layer">Library API · <code>run_conversation(messages, tools)</code></div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Loop</div>
+<pre>
+while not stopped:
+    resp = llm(messages, tools)            # Hermes-2-Pro tool template
+    if resp.tool_calls:
+        for call in resp.tool_calls:
+            result = execute(call)
+            messages.append(result)
+    else:
+        return resp.content
+</pre>
+  <div class="arrow">▼</div>
+  <div class="layer label">Tools</div>
+  <div class="layer">Decorated Python callables · auto-derived JSON Schema · zero registry abstraction</div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Model</div>
+  <div class="layer">Hermes-2-Pro / Llama-3 / any function-calling LLM</div>
+  <div class="meta" style="margin-top:10px;">No memory. No skills. No subagents. No channels. By design.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- ARCH: Nizo -->
+<!-- ============================================================ -->
+<div class="arch accent-nizo">
+  <div class="arch-title"><span class="pill nizo">Nizo</span><h3>Product stack — local-first, streaming-native, condense-aware</h3></div>
+  <div class="layer label">Channels</div>
+  <div class="layer-row cols-3">
+    <div class="layer">Web workbench <span class="meta">(HTTP + SSE)</span></div>
+    <div class="layer">CLI</div>
+    <div class="layer">Telegram <span class="meta">(planned)</span></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Orchestrator</div>
+  <div class="layer">
+    <strong>AgentLoop</strong> · streaming iterative tool calls · sealed <code>AgentEvent</code> sink
+    <div class="meta" style="margin-top:6px;">checkTokenBudget() → CondenseEngine (auto · manual · reactive) · circuit breaker · forked-worker summarization</div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Capability layer</div>
+  <div class="layer-row cols-4">
+    <div class="layer">Tools <span class="meta">(12 built-in)</span></div>
+    <div class="layer">Filesystem skills <span class="meta">(agentskills.io)</span></div>
+    <div class="layer">UserFactStore <span class="meta">(per-user memory)</span></div>
+    <div class="layer">FileCache <span class="meta">(reinjection)</span></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Persistence</div>
+  <div class="layer-row cols-2">
+    <div class="layer">SessionStore <span class="meta">(SQLite, per-chat, transactional)</span></div>
+    <div class="layer">UserFactStore <span class="meta">(SQLite, per-user)</span></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer label">LLM transport</div>
+  <div class="layer">OpenAI-compatible client · streaming · multimodal · reasoning_content</div>
+  <div class="arrow">▼</div>
+  <div class="layer label">Model</div>
+  <div class="layer">llama-server · Qwen3.6-27B Q6_K_XL + mmproj-F16 · 256k ctx · ~39 tok/s on RTX PRO 5000</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- COMPARISON TABLE -->
+<!-- ============================================================ -->
+<h2>Side-by-side</h2>
+<table class="cmp">
+  <thead>
+    <tr>
+      <th>Dimension</th>
+      <th><span class="pill openclaw">OpenClaw</span></th>
+      <th><span class="pill hermes">Hermes Agent</span></th>
+      <th><span class="pill nizo">Nizo</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td class="dim">Language / runtime</td><td>TypeScript + Python</td><td>Python</td><td>Java 21 (records, sealed, virtual threads)</td></tr>
+    <tr><td class="dim">Lines of code (core loop)</td><td>~10k+ across modules</td><td>~300</td><td>~250 (AgentLoop) + ~600 (CondenseEngine)</td></tr>
+    <tr><td class="dim">LLM target</td><td>Cloud APIs (Claude / OpenAI / Bedrock)</td><td>Hermes-2-Pro / any FC model</td><td>Local llama.cpp · Qwen3.6-27B + vision</td></tr>
+    <tr><td class="dim">Tool-call format</td><td>Provider-native (Claude / OpenAI)</td><td>Hermes-2-Pro XML tags</td><td>OpenAI-standard <code>tool_calls</code> via Hermes parser on llama-server</td></tr>
+    <tr><td class="dim">Streaming</td><td class="yes">Yes (provider SSE)</td><td class="partial">Optional</td><td class="yes">SSE end-to-end · sealed <code>AgentEvent</code> types · thinking + tools + final separated</td></tr>
+    <tr><td class="dim">Multimodal</td><td class="yes">Yes (Claude)</td><td class="no">No</td><td class="yes">Yes (Qwen3-VL via mmproj-F16, client-side normalize)</td></tr>
+    <tr><td class="dim">Skills</td><td class="yes">First-class · MD + YAML · agentskills.io</td><td class="no">None</td><td class="yes">Filesystem MD + YAML · agentskills.io-compatible · self-authoring via <code>save_skill</code></td></tr>
+    <tr><td class="dim">Subagents / Task tool</td><td class="yes">Yes · isolated context + tools</td><td class="no">No</td><td class="no">Not yet</td></tr>
+    <tr><td class="dim">MCP (model context protocol)</td><td class="yes">Native, both directions</td><td class="no">No</td><td class="no">Not yet</td></tr>
+    <tr><td class="dim">Memory layer</td><td class="partial">Session + workspace files</td><td class="no">None</td><td class="yes"><code>UserFactStore</code> injected into <em>every</em> system prompt · per-user · cross-session</td></tr>
+    <tr><td class="dim">Persistence</td><td>Filesystem-y</td><td class="no">None</td><td class="yes">SQLite (sessions + memory) · transactional <code>replaceHistory</code></td></tr>
+    <tr><td class="dim">Channels / surfaces</td><td>CLI · TUI · IDE plugin</td><td>Library only</td><td>Web (workbench + SSE) · CLI · Telegram (in repair)</td></tr>
+    <tr><td class="dim">Condense / context management</td><td>Auto + manual <code>/compact</code></td><td class="no">None</td><td class="yes">Auto + manual + reactive · 3 modes · file/skill reinjection · circuit breaker</td></tr>
+    <tr><td class="dim">Hooks</td><td class="yes">Pre/post tool · pre/post prompt</td><td class="no">None</td><td class="partial">Pre/post condense (interface, no impls yet)</td></tr>
+    <tr><td class="dim">Reflection / self-improvement</td><td class="partial">Manual via skills</td><td class="no">None</td><td class="partial">Planned · post-turn → <code>save_skill</code></td></tr>
+    <tr><td class="dim">Scheduler / reminders</td><td class="no">No (use cron)</td><td class="no">No</td><td class="partial">Planned · cron + NL parser</td></tr>
+    <tr><td class="dim">Build / deploy story</td><td>npm + pip</td><td>pip</td><td>Maven Wrapper · uber-jar · sync.sh + ssh build-on-server</td></tr>
+    <tr><td class="dim">Cold-start time</td><td>~2–5s (Node + Python interop)</td><td>~1s (Python)</td><td>~700ms (Java 21 uber-jar)</td></tr>
+    <tr><td class="dim">Marginal $/turn</td><td>Cloud per-token cost</td><td>Cloud or local</td><td class="yes">$0 (local GPU, owned hardware)</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- WHAT TO STEAL / WHAT TO AVOID -->
+<!-- ============================================================ -->
+<h2>What to steal · what to avoid</h2>
+<div class="grid3">
+  <div class="card openclaw">
+    <h4>Steal</h4>
+    <ul class="tight">
+      <li>Skill format (MD + YAML frontmatter) — done</li>
+      <li>MCP both directions — pending</li>
+      <li>Subagent isolation via <code>Task</code> — pending</li>
+      <li>Pre/post-tool hooks — partial (condense only)</li>
+    </ul>
+    <h4>Avoid</h4>
+    <ul class="tight">
+      <li>Cloud-LLM coupling baked into core types</li>
+      <li>Two-language runtime (TS + Python)</li>
+      <li>npm dep tree as part of deploy story</li>
+    </ul>
+  </div>
+
+  <div class="card hermes">
+    <h4>Steal</h4>
+    <ul class="tight">
+      <li>Single-loop simplicity — done in <code>AgentLoop</code></li>
+      <li>Hermes tool-call grammar awareness — done (llama-server <code>--tool-call-parser hermes</code>)</li>
+      <li>Tools as plain callables, no framework — done</li>
+    </ul>
+    <h4>Avoid</h4>
+    <ul class="tight">
+      <li>Stateless turns (we need persistence)</li>
+      <li>No memory/skills story (we need both)</li>
+      <li>"Library not platform" stops short of product</li>
+    </ul>
+  </div>
+
+  <div class="card nizo">
+    <h4>Strengths to lean into</h4>
+    <ul class="tight">
+      <li>Streaming end-to-end with sealed events</li>
+      <li>Per-user memory injection (not a tool)</li>
+      <li>Local model means $0 marginal experimentation cost</li>
+      <li>Tight Java 21 surface — fast iteration</li>
+    </ul>
+    <h4>Gaps to close</h4>
+    <ul class="tight">
+      <li>Subagents · MCP · reflection loop · scheduler · Telegram</li>
+      <li>Real tokenizer (not 3.5 chars/token heuristic)</li>
+      <li>Test coverage on agent core</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DECISION MATRIX -->
+<!-- ============================================================ -->
+<h2>Decision matrix</h2>
+<p class="sub">5 = strong fit · 1 = weak fit. Scored against typical CTO axes for an in-house personal-agent platform.</p>
+<table class="mat">
+  <thead>
+    <tr>
+      <th style="text-align:left;">Axis</th>
+      <th>OpenClaw</th>
+      <th>Hermes</th>
+      <th>Nizo</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td class="dim">Time-to-first-demo</td>          <td class="score-4">4</td><td class="score-5">5</td><td class="score-3">3</td></tr>
+    <tr><td class="dim">Production hardening</td>        <td class="score-4">4</td><td class="score-2">2</td><td class="score-4">4</td></tr>
+    <tr><td class="dim">Data sovereignty / privacy</td>  <td class="score-2">2</td><td class="score-3">3</td><td class="score-5">5</td></tr>
+    <tr><td class="dim">Marginal $/turn</td>             <td class="score-2">2</td><td class="score-3">3</td><td class="score-5">5</td></tr>
+    <tr><td class="dim">Long-horizon UX (memory + condense)</td><td class="score-3">3</td><td class="score-1">1</td><td class="score-5">5</td></tr>
+    <tr><td class="dim">Ecosystem reach (skills · MCP)</td><td class="score-5">5</td><td class="score-1">1</td><td class="score-3">3</td></tr>
+    <tr><td class="dim">Operational simplicity</td>      <td class="score-3">3</td><td class="score-4">4</td><td class="score-4">4</td></tr>
+    <tr><td class="dim">Hackability of core</td>         <td class="score-3">3</td><td class="score-5">5</td><td class="score-4">4</td></tr>
+    <tr><td class="dim">Cold-start / latency</td>        <td class="score-3">3</td><td class="score-4">4</td><td class="score-5">5</td></tr>
+    <tr><td class="dim"><strong>Total</strong></td>      <td class="score-3"><strong>29</strong></td><td class="score-3"><strong>28</strong></td><td class="score-4"><strong>38</strong></td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- WHY NIZO -->
+<!-- ============================================================ -->
+<h2>Why Nizo plants its flag here</h2>
+<div class="tldr">
+  <ul>
+    <li><strong>Local-first wins on long-horizon agents.</strong> Agents that remember get expensive on cloud APIs (every turn re-bills the system + memory). A 256k-context local model with prompt-cache reuse makes per-user memory architecturally cheap.</li>
+    <li><strong>Java 21 is the right runtime for agent infra.</strong> Sealed types make event streams safe; virtual threads make per-channel concurrency free; uber-jar makes deploy boring; cold start beats Node + Python.</li>
+    <li><strong>Tight surface beats wide surface.</strong> Hermes proves you don't need much loop. OpenClaw proves you do need a real platform around it. Nizo aims at the intersection — minimal core, deliberate platform around it.</li>
+    <li><strong>Condense is non-negotiable.</strong> Without it, every long session degrades. We built it before we needed it; OpenClaw added it later; Hermes leaves it to you.</li>
+    <li><strong>Per-user memory is a system property, not a tool.</strong> Tools the model can forget to call don't make a persona. Injecting memory at every turn does.</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<!-- STRATEGIC RISKS -->
+<!-- ============================================================ -->
+<h2>Strategic risks &amp; mitigations</h2>
+<table class="cmp">
+  <thead>
+    <tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Local model quality lags frontier (Claude Opus / GPT-5)</td>
+      <td class="partial">Medium</td>
+      <td class="bad">High</td>
+      <td>Provider abstraction in <code>nizo-llm</code> already present — fall back to cloud per-task; keep Qwen for memory-heavy turns</td>
+    </tr>
+    <tr>
+      <td>MCP becomes the de-facto standard, we miss the wave</td>
+      <td class="partial">Medium</td>
+      <td class="partial">Medium</td>
+      <td>Add MCP client + server adapters next quarter; tool registry already has the right shape</td>
+    </tr>
+    <tr>
+      <td>Single GPU bottleneck at scale</td>
+      <td class="partial">Medium</td>
+      <td class="partial">Medium</td>
+      <td>Personal-agent profile = single user; add tenant-shard later if multi-tenant; vLLM with TP-8 if/when we have a rack</td>
+    </tr>
+    <tr>
+      <td>Java ecosystem fewer agent libs than Python</td>
+      <td class="yes">Low</td>
+      <td class="yes">Low</td>
+      <td>We don't need them — agent infra is HTTP + SQLite + sealed types; the libs are accidental complexity</td>
+    </tr>
+    <tr>
+      <td>No tests on agent core</td>
+      <td class="bad">High</td>
+      <td class="partial">Medium</td>
+      <td>Add JUnit tests for <code>CondenseEngine</code>, <code>AgentLoop</code> reactive path, parser; gate CI on them</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- WHAT TO DO NEXT -->
+<!-- ============================================================ -->
+<h2>What to do next (90-day view)</h2>
+<ol>
+  <li><strong>Month 1 — close the platform gap.</strong> Subagents (<code>Task</code>-style isolated workers) · MCP client + server · pre/post-tool hooks. Steal directly from OpenClaw's surface.</li>
+  <li><strong>Month 2 — close the quality gap.</strong> Real Qwen tokenizer (replace 3.5 chars/token) · auto-archive on condense (recoverable) · validator with retry · JUnit tests on core paths.</li>
+  <li><strong>Month 3 — long-horizon UX.</strong> Reflection loop (post-turn → <code>save_skill</code>) · scheduler (cron + NL reminders) · Telegram resurrection · semantic file/skill reinjection (use <code>nizo-memory</code> embeddings).</li>
+</ol>
+
+<p class="footnote">Generated for internal review. Compares as of the codebase state at writing — Nizo includes the condense subsystem, per-user memory injection, streaming SSE workbench, and 12 built-in tools. OpenClaw and Hermes are characterized from public docs/repos.</p>
+
+</body>
+</html>

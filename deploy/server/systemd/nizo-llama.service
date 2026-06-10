@@ -1,0 +1,37 @@
+[Unit]
+Description=Nizo llama-server — Qwen3.6-27B Q6 + mmproj on :8080
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kislay
+Group=kislay
+WorkingDirectory=/home/kislay
+
+# Secrets + huggingface cache + CUDA paths
+EnvironmentFile=-/home/kislay/.nizo/.env
+Environment=HF_HOME=/mnt/ai-models/caches/hf
+Environment=CUDA_HOME=/opt/cuda
+Environment=PATH=/opt/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+# The script execs the binary so systemd tracks the right PID.
+# (Output goes to /mnt/ai-models/qwen3.6-27b/logs/llama-serve.log inside the script.)
+ExecStart=/mnt/ai-models/envs/serve_llamacpp.sh
+
+# Restart cleanly on crash; back off so we don't thrash the GPU
+Restart=always
+RestartSec=10
+
+# Cap the crashloop. CUDA OOMs sometimes don't self-recover; without this
+# llama-server thrashes the GPU every 10s indefinitely.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Avoid OOM-killing this process — it's the most important one
+OOMScoreAdjust=-500
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

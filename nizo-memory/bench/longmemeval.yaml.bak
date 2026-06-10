@@ -1,0 +1,57 @@
+# Dedicated config for LongMemEval runs.
+# - Separate DB so we don't contend with the live server.
+# - Reflection disabled — the harness already wipes per-item, no need.
+# - Extraction timeouts loose (LongMemEval messages can be long).
+
+storage:
+  backend: sqlite
+  path: /tmp/nizo-longmemeval.db
+
+vector:
+  backend: inmemory
+
+embedder:
+  enabled: true
+  backend: ollama
+  ollama:
+    base_url: http://localhost:11434
+    model: nomic-embed-text
+    timeout_seconds: 60
+
+extraction:
+  enabled: false
+  backend: none
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:14b
+    timeout_seconds: 120
+
+consolidation:
+  enabled: false   # don't double-distill during benchmark
+  consolidate_every_n: 999999
+  backend: none
+
+compaction:
+  enabled: false
+  backend: none
+
+verifier:
+  enabled: false
+
+graph:
+  enabled: true
+
+recall:
+  default_token_budget: 1500
+  confidence_floor: 0.0
+  min_similarity_floor: 0.55
+  min_top_score: 0.55
+
+server:
+  port: 8766    # different from live server
+  threads: 4
+
+reflection:
+  enabled: false
+  tick_interval_minutes: 999999
+  backend: none

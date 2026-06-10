@@ -1,0 +1,39 @@
+[Unit]
+Description=Nizo agent — Java orchestrator on :7777
+After=network-online.target nizo-llama.service nizo-voice.service
+Wants=network-online.target
+Requires=nizo-llama.service
+
+[Service]
+Type=simple
+User=kislay
+Group=kislay
+WorkingDirectory=/home/kislay/nizo_v1
+
+# Secrets (SmartProxy keys etc.) + Web bind-host
+EnvironmentFile=-/home/kislay/.nizo/.env
+Environment=NIZO_WEB_HOST=0.0.0.0
+Environment=NIZO_LLM_URL=http://localhost:8080
+Environment=NIZO_LLM_MODEL=Qwen/Qwen3.6-27B
+Environment=NIZO_VOICE_URL=http://localhost:7780
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+# Sync default skills from the repo into ~/.nizo/skills/ before launch
+# (mirrors the pre-launch step in start_nizo.sh)
+ExecStartPre=/usr/bin/bash -c 'mkdir -p $HOME/.nizo/skills && [ -d /home/kislay/nizo_v1/deploy/server/skills ] && rsync -a --update /home/kislay/nizo_v1/deploy/server/skills/ $HOME/.nizo/skills/ || true'
+
+ExecStart=/usr/bin/java -jar /home/kislay/nizo_v1/nizo-app/target/nizo.jar ui
+
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Stop the crashloop after 5 failures in 5 min so a wedged process doesn't
+# hammer the GPU forever (verified: prior incident had llama-server respawn
+# every 10s for hours after a CUDA OOM that didn't self-recover).
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

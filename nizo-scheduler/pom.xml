@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>ai.nizo</groupId>
+        <artifactId>nizo-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>nizo-scheduler</artifactId>
+    <name>Nizo — Scheduler (cron + reminders)</name>
+    <description>Cron-based scheduler and natural-language reminder parser.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>ai.nizo</groupId>
+            <artifactId>nizo-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.cronutils</groupId>
+            <artifactId>cron-utils</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+    </dependencies>
+</project>

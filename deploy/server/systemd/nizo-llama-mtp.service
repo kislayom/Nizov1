@@ -1,0 +1,38 @@
+[Unit]
+Description=Nizo llama-server (MTP) — Qwen3.6-27B speculative-decoding mode on :8081
+After=network-online.target
+Wants=network-online.target
+
+# Mutual exclusion with the standard llama-server. systemd can't enforce VRAM
+# contention, but this Conflicts= declaration ensures `systemctl start
+# nizo-llama-mtp` automatically stops nizo-llama (and vice versa) at the
+# systemd level so they never race on GPU memory.
+Conflicts=nizo-llama.service
+
+[Service]
+Type=simple
+User=kislay
+Group=kislay
+WorkingDirectory=/home/kislay
+
+# Same env + paths as nizo-llama (HF cache, CUDA)
+EnvironmentFile=-/home/kislay/.nizo/.env
+Environment=HF_HOME=/mnt/ai-models/caches/hf
+Environment=CUDA_HOME=/opt/cuda
+Environment=PATH=/opt/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+ExecStart=/mnt/ai-models/envs/serve_llamacpp_mtp.sh
+
+# Crash recovery — same posture as nizo-llama
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+OOMScoreAdjust=-500
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+# NOT enabled by default — activated via `llama-switch mtp`. Keep it manual.
+WantedBy=multi-user.target
