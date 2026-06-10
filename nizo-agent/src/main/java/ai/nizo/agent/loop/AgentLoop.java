@@ -256,7 +256,7 @@ public final class AgentLoop implements ChatHandler {
         // skip the next LLM round entirely — the tool's content is the assistant's reply.
         boolean verbatimShortCircuit = false;
 
-        sessions.append(in.chatId(), userMessage);
+        sessions.append(in.chatId(), userMessage, in.userId());
 
         int iteration = 0;
         int totalTools = 0;
@@ -535,7 +535,7 @@ public final class AgentLoop implements ChatHandler {
 
         if (!noSynthesis) {
             ChatMessage assistantReply = ChatMessage.assistant(finalContent);
-            sessions.append(in.chatId(), assistantReply);
+            sessions.append(in.chatId(), assistantReply, in.userId());
         }
 
         sink.emit(new AgentEvent.FinalReply(iteration, finalContent, promptTokens, completionTokens, stopReason));
@@ -557,9 +557,14 @@ public final class AgentLoop implements ChatHandler {
                 && !"llm_error".equals(stopReason)) {
             try {
                 String prompt = (in.text() == null) ? "" : in.text();
+                // Map the legacy web identity onto the stock store's pre-existing
+                // "default" bucket so Kislay's earlier reports stay in his library.
+                String reportUser = (in.userId() == null || in.userId().isBlank()
+                        || "web-user".equals(in.userId()))
+                        ? StockReportStore.DEFAULT_USER : in.userId();
                 stockReports.save(new StockReportStore.Report(
                         in.chatId(),
-                        StockReportStore.DEFAULT_USER,
+                        reportUser,
                         StockReportStore.tickerFromChatId(in.chatId()),
                         System.currentTimeMillis(),
                         finalContent,

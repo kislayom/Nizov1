@@ -18,6 +18,15 @@ public interface SessionStore {
     /** Append a single message. Implementations should persist before returning. */
     void append(String chatId, ChatMessage message);
 
+    /**
+     * Append with an owner tag. {@code userId} marks which user the chat belongs to
+     * (web identity picker / Telegram user id). Default ignores the tag for
+     * implementations that don't track ownership.
+     */
+    default void append(String chatId, ChatMessage message, String userId) {
+        append(chatId, message);
+    }
+
     /** Wipe a single chat's history. */
     void clear(String chatId);
 
@@ -38,4 +47,11 @@ public interface SessionStore {
 
     /** All known chats, newest first. Default returns empty (not all impls track this). */
     default List<ChatSummary> listChats(int limit) { return List.of(); }
+
+    /**
+     * Chats owned by {@code userId}, newest first. Legacy rows written before ownership
+     * tracking (user_id NULL) are attributed to the owner identity {@code "web-user"} so
+     * pre-existing history stays with Kislay. Default ignores the filter.
+     */
+    default List<ChatSummary> listChats(int limit, String userId) { return listChats(limit); }
 }

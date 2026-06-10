@@ -235,7 +235,20 @@ public final class WebChannel implements AutoCloseable {
 
         if (path.equals("/api/sessions") || path.equals("/api/sessions/")) {
             if (!"GET".equalsIgnoreCase(method)) { respondText(ex, 405, "method not allowed"); return; }
-            List<ChatSummary> chats = ctx.sessions().listChats(200);
+            // ?userId=papa → only that user's chats. Absent → unfiltered (legacy
+            // behavior; the web UI always passes its picked identity).
+            String userFilter = null;
+            String rawQ = ex.getRequestURI().getRawQuery();
+            if (rawQ != null) {
+                for (String pair : rawQ.split("&")) {
+                    int eq = pair.indexOf('=');
+                    if (eq > 0 && "userId".equals(URLDecoder.decode(pair.substring(0, eq), StandardCharsets.UTF_8))) {
+                        String v = URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8);
+                        if (!v.isBlank()) userFilter = v;
+                    }
+                }
+            }
+            List<ChatSummary> chats = ctx.sessions().listChats(200, userFilter);
             List<Map<String, Object>> rows = new ArrayList<>();
             for (ChatSummary s : chats) {
                 Map<String, Object> r = new LinkedHashMap<>();

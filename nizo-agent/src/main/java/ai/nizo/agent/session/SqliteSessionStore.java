@@ -75,8 +75,17 @@ public final class SqliteSessionStore implements SessionStore {
                 );
                 CREATE INDEX IF NOT EXISTS ix_session_chat_created
                     ON session_messages (chat_id, id);
+                """),
+            // Per-user namespacing (June 2026): nullable owner tag per row. Legacy rows
+            // stay NULL and are attributed to the owner identity "web-user" at query
+            // time — no backfill needed.
+            SchemaMigrator.of(2, "add user_id owner tag", """
+                ALTER TABLE session_messages ADD COLUMN user_id TEXT;
                 """)
     );
+
+    /** Owner identity legacy rows (user_id NULL) belong to — Kislay's web identity. */
+    private static final String LEGACY_OWNER = "web-user";
 
     private void applyPragmas() {
         try (Connection c = ds.getConnection(); Statement s = c.createStatement()) {
@@ -122,10 +131,15 @@ public final class SqliteSessionStore implements SessionStore {
 
     @Override
     public synchronized void append(String chatId, ChatMessage message) {
+        append(chatId, message, null);
+    }
+
+    @Override
+    public synchronized void append(String chatId, ChatMessage message, String userId) {
         if (chatId == null || chatId.isBlank() || message == null) return;
         String sql = """
-            INSERT INTO session_messages (chat_id, role, content, tool_call_id, name, tool_calls, images, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO session_messages (chat_id, role, content, tool_call_id, name, tool_calls, images, created_at, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """;
         try (Connection c = open(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, chatId);
@@ -136,6 +150,7 @@ public final class SqliteSessionStore implements SessionStore {
             ps.setString(6, encodeToolCalls(message.toolCalls()));
             ps.setString(7, encodeImages(message.images()));
             ps.setLong(8, System.currentTimeMillis());
+            if (userId == null || userId.isBlank()) ps.setNull(9, java.sql.Types.VARCHAR); else ps.setString(9, userId);
             ps.executeUpdate();
         } catch (Exception e) {
             LOG.warn("session append failed for {}: {}", chatId, e.toString());
@@ -147,12 +162,23 @@ public final class SqliteSessionStore implements SessionStore {
         if (chatId == null || chatId.isBlank()) return;
         String del = "DELETE FROM session_messages WHERE chat_id = ?";
         String ins = """
-            INSERT INTO session_messages (chat_id, role, content, tool_call_id, name, tool_calls, images, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO session_messages (chat_id, role, content, tool_call_id, name, tool_calls, images, created_at, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """;
         try (Connection c = open()) {
             c.setAutoCommit(false);
             try {
+                // Preserve ownership across the rebuild — condense must not orphan the
+                // chat from its user's listing. MAX() ignores NULLs, so a chat with any
+                // tagged row keeps its owner; an all-NULL (legacy) chat stays NULL.
+                String owner = null;
+                try (PreparedStatement ps = c.prepareStatement(
+                        "SELECT MAX(user_id) FROM session_messages WHERE chat_id = ?")) {
+                    ps.setString(1, chatId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) owner = rs.getString(1);
+                    }
+                }
                 try (PreparedStatement ps = c.prepareStatement(del)) {
                     ps.setString(1, chatId);
                     ps.executeUpdate();
@@ -172,6 +198,7 @@ public final class SqliteSessionStore implements SessionStore {
                             ps.setString(7, encodeImages(m.images()));
                             // Preserve insertion order across the rebuild — bump created_at by index.
                             ps.setLong(8, now + i);
+                            if (owner == null) ps.setNull(9, java.sql.Types.VARCHAR); else ps.setString(9, owner);
                             ps.addBatch();
                         }
                         ps.executeBatch();
@@ -215,7 +242,18 @@ public final class SqliteSessionStore implements SessionStore {
 
     @Override
     public List<ChatSummary> listChats(int limit) {
+        return listChats(limit, null);
+    }
+
+    @Override
+    public List<ChatSummary> listChats(int limit, String userId) {
         // Aggregate per chat: count, last timestamp, last user msg, last assistant reply.
+        // Ownership filter: a chat belongs to MAX(user_id) (NULL-safe — MAX ignores NULLs,
+        // so any tagged row claims the chat); all-NULL legacy chats belong to LEGACY_OWNER.
+        // userId == null → no filter (admin/all view, the pre-namespacing behavior).
+        String ownerFilter = (userId == null || userId.isBlank())
+                ? ""
+                : "HAVING COALESCE(MAX(user_id), '" + LEGACY_OWNER + "') = ?";
         String sql = """
             WITH agg AS (
               SELECT chat_id,
@@ -223,7 +261,8 @@ public final class SqliteSessionStore implements SessionStore {
                      MAX(created_at) AS last_ts
               FROM session_messages
               GROUP BY chat_id
-            ),
+              %s
+            ),""".formatted(ownerFilter) + """
             last_user AS (
               SELECT chat_id, content
               FROM session_messages s
@@ -246,8 +285,11 @@ public final class SqliteSessionStore implements SessionStore {
             LIMIT ?
         """;
         List<ChatSummary> out = new ArrayList<>();
+        boolean filtered = !ownerFilter.isEmpty();
         try (Connection c = open(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setInt(1, Math.max(1, limit));
+            int p = 1;
+            if (filtered) ps.setString(p++, userId);
+            ps.setInt(p, Math.max(1, limit));
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String lu = rs.getString("last_user");

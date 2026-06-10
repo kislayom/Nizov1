@@ -479,6 +479,47 @@
     box-shadow: inset 0 0 0 1px var(--border-strong);
   }
 
+  /* Identity chip + picker — per-user namespacing (June 2026) */
+  .user-chip {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text-2); font: inherit; font-size: 11px; font-weight: 600;
+    padding: 4px 10px; border-radius: 999px; cursor: pointer;
+    margin-left: auto;
+    transition: border-color .15s ease, color .15s ease;
+  }
+  .user-chip:hover { border-color: var(--accent); color: var(--text); }
+  .user-picker-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,.65); backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .user-picker {
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--r-lg, 14px); padding: 26px 30px; width: min(380px, 90vw);
+    text-align: center;
+  }
+  .user-picker h2 { margin: 0 0 6px; font-size: 17px; color: var(--text); }
+  .user-picker-sub { margin: 0 0 18px; font-size: 12px; color: var(--text-3); }
+  .user-picker-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .user-picker-options button {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); font: inherit; font-size: 14px; font-weight: 600;
+    padding: 11px; border-radius: var(--r-md, 10px); cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .user-picker-options button:hover { border-color: var(--accent); background: var(--surface-3); }
+  .user-picker-custom { display: flex; gap: 8px; }
+  .user-picker-custom input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--r-md, 10px); padding: 8px 10px; color: var(--text);
+    font: inherit; font-size: 12px;
+  }
+  .user-picker-custom button {
+    appearance: none; border: 0; background: var(--accent); color: #fff;
+    font: inherit; font-size: 12px; font-weight: 600;
+    padding: 8px 16px; border-radius: var(--r-md, 10px); cursor: pointer;
+  }
+
   /* By default we show chat. body[data-view=stocks|music|india] flips it. */
   body:not([data-view="stocks"]) .stock-view { display: none !important; }
   body[data-view="stocks"] #ctxBar,
@@ -2788,7 +2829,26 @@ window._loadPdfLibs = function () {
     <button type="button" class="view-tab" id="viewTabStock" role="tab" aria-selected="false" data-view="stocks">📈 Stocks</button>
     <button type="button" class="view-tab" id="viewTabIndia" role="tab" aria-selected="false" data-view="india">🇮🇳 India Picks</button>
     <button type="button" class="view-tab" id="viewTabMusic" role="tab" aria-selected="false" data-view="music">🎵 Music</button>
+    <button type="button" class="user-chip" id="userChip" title="Switch user">👤</button>
   </nav>
+
+  <!-- Identity picker — family trust model: pick who you are, no passwords.
+       Everything (chats, stock library, memory) is namespaced by this id. -->
+  <div class="user-picker-overlay" id="userPickerOverlay" style="display:none">
+    <div class="user-picker">
+      <h2>Who's using Nizo?</h2>
+      <p class="user-picker-sub">Your chats, stock library and memory are kept separate per person.</p>
+      <div class="user-picker-options">
+        <button data-uid="web-user" data-uname="Kislay">😎 Kislay</button>
+        <button data-uid="papa" data-uname="Papa">👴 Papa</button>
+        <button data-uid="brother" data-uname="Brother">👦 Brother</button>
+      </div>
+      <div class="user-picker-custom">
+        <input type="text" id="userPickerCustom" placeholder="someone else? type a name" maxlength="24">
+        <button id="userPickerCustomGo">Go</button>
+      </div>
+    </div>
+  </div>
 
   <span class="spacer"></span>
   <button type="button" class="iconbtn" id="settingsBtn" title="Settings (voice, theme, ...)">
@@ -3306,6 +3366,55 @@ window._loadPdfLibs = function () {
 </main>
 
 <script>
+// =================== identity (per-user namespacing) ===================
+// Family trust model: a picked identity, no passwords — the VPN is the perimeter.
+// localStorage 'nizo:user' = {"id":"papa","name":"Papa"}. Kislay keeps the legacy
+// id "web-user" so his pre-existing chats/memory stay attached.
+const NIZO_USER_KEY = 'nizo:user';
+function nizoUser() {
+  try {
+    const u = JSON.parse(localStorage.getItem(NIZO_USER_KEY) || 'null');
+    if (u && u.id) return u;
+  } catch (e) {}
+  return null;
+}
+function setNizoUser(id, name) {
+  localStorage.setItem(NIZO_USER_KEY, JSON.stringify({ id, name }));
+  const chip = document.getElementById('userChip');
+  if (chip) chip.textContent = '👤 ' + name;
+  const ov = document.getElementById('userPickerOverlay');
+  if (ov) ov.style.display = 'none';
+}
+/** Current userId for API calls — falls back to the legacy owner identity. */
+function nizoUserId() { const u = nizoUser(); return u ? u.id : 'web-user'; }
+function showUserPicker() {
+  const ov = document.getElementById('userPickerOverlay');
+  if (ov) ov.style.display = 'flex';
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const u = nizoUser();
+  const chip = document.getElementById('userChip');
+  if (chip) {
+    chip.textContent = u ? ('👤 ' + u.name) : '👤';
+    chip.addEventListener('click', showUserPicker);
+  }
+  document.querySelectorAll('.user-picker-options button').forEach(b =>
+    b.addEventListener('click', () => {
+      setNizoUser(b.dataset.uid, b.dataset.uname);
+      location.reload(); // re-fetch sessions/library under the new identity
+    }));
+  const go = document.getElementById('userPickerCustomGo');
+  if (go) go.addEventListener('click', () => {
+    const name = (document.getElementById('userPickerCustom').value || '').trim();
+    if (!name) return;
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!id) return;
+    setNizoUser(id, name);
+    location.reload();
+  });
+  if (!u) showUserPicker();   // first visit on this browser → ask who you are
+});
+
 // =================== state ===================
 const state = {
   chatId: null,
@@ -4576,7 +4685,7 @@ function kickIndiaPicks() {
   // Enqueue
   fetch('/api/chat/messages', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chatId, text: prompt })
+    body: JSON.stringify({ chatId, text: prompt, userId: nizoUserId() })
   }).catch(e => {
     if (statusEl) statusEl.innerHTML = '<span class="err">✗ enqueue failed: ' + e.message + '</span>';
     if (btn) btn.disabled = false;
@@ -5530,7 +5639,7 @@ function renderUsageList() {
 }
 async function loadSessions() {
   try {
-    const r = await fetch('/api/sessions'); const j = await r.json();
+    const r = await fetch('/api/sessions?userId=' + encodeURIComponent(nizoUserId())); const j = await r.json();
     state.sessions = j.sessions || [];
     renderSessions();
   } catch (e) {}
@@ -6803,7 +6912,7 @@ async function streamSend(text, imgs) {
   // Build payload — include mode/language only when this turn is voice-initiated.
   // The server uses these to inject a "be crisp + reply in this language" hint
   // into the system prompt, so spoken replies are short + in the right language.
-  const payload = { chatId: state.chatId, text, images: imgs };
+  const payload = { chatId: state.chatId, text, images: imgs, userId: nizoUserId() };
   if (typeof voiceState !== 'undefined' && voiceState.lastTurnWasVoice) {
     payload.mode = 'voice';
     payload.language = voiceState.detectedLang || 'en';
@@ -7667,7 +7776,7 @@ function startStockAnalysis(rawTicker) {
   fetch('/api/chat/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chatId, text })
+    body: JSON.stringify({ chatId, text, userId: nizoUserId() })
   }).catch(err => liveLog('enqueue failed: ' + err.message, 'err'));
 }
 
@@ -8039,7 +8148,10 @@ async function loadStockLibrary() {
   if (!listEl) return;
   let data;
   try {
-    const r = await fetch('/api/stock/history?limit=50');
+    // Kislay's legacy web identity maps to the stock store's "default" bucket
+    // (where all pre-namespacing reports live); others get their own bucket.
+    const stockUser = nizoUserId() === 'web-user' ? 'default' : nizoUserId();
+    const r = await fetch('/api/stock/history?limit=50&userId=' + encodeURIComponent(stockUser));
     if (!r.ok) throw new Error('history ' + r.status);
     data = await r.json();
   } catch (e) {
@@ -8535,7 +8647,7 @@ async function restoreStockRunIfAny() {
  */
 async function findActiveOrLatestStockChat() {
   try {
-    const r = await fetch('/api/sessions?limit=200');
+    const r = await fetch('/api/sessions?limit=200&userId=' + encodeURIComponent(nizoUserId()));
     if (!r.ok) return null;
     const j = await r.json();
     const stocks = (j.sessions || []).filter(s => /^stock-/i.test(s.chatId || ''));
