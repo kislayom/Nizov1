@@ -32,15 +32,15 @@ import java.util.Optional;
  * <p>Provider chain (each one tried in order, fallback on error/empty):
  * <ol>
  *   <li><b>SearXNG</b> if {@code SEARXNG_BASE_URL} is set (recommended; self-hosted, no key)</li>
- *   <li><b>Brave Search API</b> if {@code BRAVE_API_KEY} is set</li>
- *   <li><b>Bing HTML</b> as no-key default (always available, stable selectors)</li>
- *   <li><b>DuckDuckGo HTML</b> as last-resort fallback (often bot-blocked → 202 anomaly page)</li>
+ *   <li><b>Brave Search API</b> if {@code BRAVE_API_KEY} is set (best quality; free tier 2k/mo)</li>
+ *   <li><b>Mojeek HTML</b> — no-key default. Independent UK crawler that does NOT
+ *       bot-block home-server IPs (the only engine of 7 tested that still served
+ *       organic results to our box, June 2026). Smaller index than Bing but real.</li>
+ *   <li><b>Bing HTML</b> — kept in the chain in case the IP rehabilitates, but as of
+ *       June 2026 Bing serves a challenge page (b_no, 0 results) to this box.</li>
+ *   <li><b>DuckDuckGo HTML</b> — same story, serves the 202 "anomaly" page.</li>
+ *   <li><b>SmartProxy → Bing</b> if creds configured (currently 403 — lapsed?).</li>
  * </ol>
- *
- * <p><b>Why Bing first instead of DDG:</b> DuckDuckGo's html.duckduckgo.com and
- * lite.duckduckgo.com endpoints aggressively bot-detect server-side calls and serve a
- * 202 "anomaly modal" instead of results, regardless of User-Agent. Bing returns real
- * results with a Linux Firefox UA, no key needed. Verified May 2026 from our server box.
  */
 public final class WebSearchTool implements Tool {
 
@@ -130,7 +130,17 @@ public final class WebSearchTool implements Tool {
                 LOG.warn("Brave failed: {}", e.toString());
             }
         }
-        // Bing — primary no-key fallback. Stable HTML, doesn't bot-block server scrapes.
+        // Mojeek — primary no-key provider. Independent crawler, tolerant of
+        // server-side callers (sole survivor of the June 2026 engine probe).
+        try {
+            List<Result> r = searchMojeek(query, limit);
+            if (!r.isEmpty()) return r;
+            LOG.info("Mojeek returned empty, trying Bing");
+        } catch (Exception e) {
+            LOG.warn("Mojeek failed: {}", e.toString());
+        }
+        // Bing — kept for the day this IP rehabilitates; currently serves a
+        // challenge page (0 rows) to us.
         try {
             List<Result> r = searchBing(query, limit);
             if (!r.isEmpty()) return r;
@@ -213,6 +223,44 @@ public final class WebSearchTool implements Tool {
             String u     = r.path("url").asText("").trim();
             String s     = r.path("description").asText("").trim();
             if (!u.isEmpty()) out.add(new Result(title, u, s));
+        }
+        return out;
+    }
+
+    /** Mojeek HTML scrape. No API key, no bot wall (verified June 2026). Selectors:
+     *  {@code ul.results-standard li} → {@code h2 a.title} (title + direct href, no
+     *  redirect unwrapping needed) + {@code p.s} snippet. */
+    private List<Result> searchMojeek(String query, int limit) throws Exception {
+        String url = "https://www.mojeek.com/search?q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
+        URI uri = URI.create(url);
+        SsrfGuard.assertSafe(uri);
+        HttpResponse<String> resp = http.send(
+                HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofSeconds(12))
+                        .header("User-Agent", UA)
+                        .header("Accept", "text/html,application/xhtml+xml")
+                        .header("Accept-Language", "en-US,en;q=0.9")
+                        .GET().build(),
+                BoundedHttp.ofString());
+        if (resp.statusCode() / 100 != 2) {
+            throw new RuntimeException("mojeek HTTP " + resp.statusCode());
+        }
+        Document doc = Jsoup.parse(resp.body(), url);
+        Elements rows = doc.select("ul.results-standard li");
+        List<Result> out = new ArrayList<>();
+        for (Element row : rows) {
+            if (out.size() >= limit) break;
+            Element a = row.selectFirst("h2 a.title, h2 a");
+            if (a == null) continue;
+            String title = a.text().trim();
+            String href  = a.absUrl("href");
+            if (href.isEmpty()) href = a.attr("href");
+            Element snipP = row.selectFirst("p.s");
+            String snippet = snipP == null ? "" : snipP.text().trim();
+            if (!href.isEmpty() && !title.isEmpty()) out.add(new Result(title, href, snippet));
+        }
+        if (out.isEmpty()) {
+            LOG.warn("mojeek parse returned 0 results (htmlBytes={}, rows={})", resp.body().length(), rows.size());
         }
         return out;
     }
