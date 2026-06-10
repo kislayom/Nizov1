@@ -187,6 +187,13 @@ These are non-obvious things the pipeline got wrong, where the fix is in code no
   shared the bottom region and labels (year markers) were clipped. Fix: chart now 420px
   + `rightPriceScale.scaleMargins.bottom: 0.22` reserves volume pane room + a dynamic
   legend strip (`.lwc-legend`) builds above the chart with colour swatches per series.
+- **News via API, not scraping (June 2026)**: the news analyst's web_search→web_fetch
+  path was the slowest, least reliable stage (StockTitan 403, WSJ DataDome, Bing/DDG
+  empty) — and the SmartProxy paid fallback now rejects our credentials (403 on
+  selfcheck; subscription likely lapsed). Fix: `stock_news` tool backed by Finnhub
+  `/company-news` (free tier, 60 req/min) — one ~5s call returns months of dated,
+  sourced headlines. `stock_news_analyst/SKILL.md` mandates it as the FIRST call;
+  web_search is demoted to coverage-gap fallback (some NSE/BSE names) + macro color.
 
 ## Module map
 
@@ -380,6 +387,15 @@ Components don't touch session config — eliminates the 560557684
   for output. ~half day.
 - **Server-side stock report cache**: iOS has local cache; web doesn't.
   Should unify in a sqlite `stock_reports` table on the Dell.
+
+### Backups
+
+`nizo-backup.timer` (03:30 daily, `Persistent=true`) runs
+[deploy/server/nizo-backup.sh](deploy/server/nizo-backup.sh): WAL-safe `sqlite3 .backup`
+snapshots of every `~/.nizo/*.db` + tar of skills/config/jobs → Dell
+(`kislay@192.168.5.90:~/backups/nizo/`, 14-day rotation, remote tar verified before
+success). Kimaya→Dell auth: dedicated ed25519 key (`kimaya-backup`). Restore: extract,
+copy `db/*` into `~/.nizo/`, rest of `.nizo/` as-is, restart nizo-app.
 
 ### Server systemd
 
