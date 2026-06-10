@@ -187,6 +187,14 @@ These are non-obvious things the pipeline got wrong, where the fix is in code no
   shared the bottom region and labels (year markers) were clipped. Fix: chart now 420px
   + `rightPriceScale.scaleMargins.bottom: 0.22` reserves volume pane room + a dynamic
   legend strip (`.lwc-legend`) builds above the chart with colour swatches per series.
+- **Search engines bot-flag the home IP (June 2026)**: Bing serves a challenge page
+  (`b_no`, 0 rows despite 70KB HTML), DDG html+lite both serve the anomaly wall,
+  Ecosia 403s, Yandex redirects to captcha; Brave/Startpage HTML are JS shells.
+  Of 7 engines probed, only **Mojeek** (independent UK crawler) returns organic
+  results. `WebSearchTool` chain is now SearXNG → Brave API (`BRAVE_API_KEY`) →
+  Mojeek → Bing → DDG → SmartProxy; Mojeek carries keyless traffic. If search
+  quality matters more later: Brave free tier (2k/mo) or self-host SearXNG behind
+  a different egress IP.
 - **News via API, not scraping (June 2026)**: the news analyst's web_search→web_fetch
   path was the slowest, least reliable stage (StockTitan 403, WSJ DataDome, Bing/DDG
   empty) — and the SmartProxy paid fallback now rejects our credentials (403 on
