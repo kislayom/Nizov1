@@ -25,8 +25,13 @@ that affect this company's intrinsic value or near-term price. Be ruthless about
    Never invent article URLs.
 4. `current_time` — to scope "last 3 months" correctly.
 
-Budget guidance: `stock_news` + 1-2 `web_search` for macro is the normal shape
-of this job. If you're making a 4th web_search, you're padding.
+**Budget rule (HARD):** once `stock_news` returns headlines, you get AT MOST one
+`web_search` (macro context only) — then you MUST write your section. The normal
+shape of this job is 2-3 tool calls total: `stock_news`, optionally `current_time`,
+optionally ONE `web_search`. Web search is currently unreliable (often 0 results);
+do not retry an empty search with a rephrased query — write the section from the
+`stock_news` headlines instead. A dated-headline catalysts table built purely from
+`stock_news` output is a COMPLETE, correct answer.
 
 ## Source priority by market
 
