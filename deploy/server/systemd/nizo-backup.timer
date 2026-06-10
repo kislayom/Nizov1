@@ -1,0 +1,11 @@
+[Unit]
+Description=Run nizo-backup nightly at 03:30
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=600
+# If the box was asleep/off at 03:30, run on next boot instead of skipping.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

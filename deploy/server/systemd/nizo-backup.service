@@ -1,0 +1,12 @@
+[Unit]
+Description=Nizo nightly backup — ~/.nizo to Dell
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=kislay
+ExecStart=/home/kislay/nizo_v1/deploy/server/nizo-backup.sh
+# Backup is I/O-light (~100MB); nice it anyway so it never competes with inference.
+Nice=10
+IOSchedulingClass=idle
