@@ -489,14 +489,17 @@
   }
   .user-chip:hover { border-color: var(--accent); color: var(--text); }
   .user-picker-overlay {
-    position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,.65); backdrop-filter: blur(4px);
+    /* Must beat every stacking context on the page (suggestion chips, chat log,
+       composer all have their own) — verified via Chrome June 2026 that 1000 loses. */
+    position: fixed; inset: 0; z-index: 2147480000;
+    background: rgba(0,0,0,.78); backdrop-filter: blur(6px);
     display: flex; align-items: center; justify-content: center;
   }
   .user-picker {
-    background: var(--surface); border: 1px solid var(--border-strong);
+    background: var(--surface-2, #10141b); border: 1px solid var(--border-strong);
     border-radius: var(--r-lg, 14px); padding: 26px 30px; width: min(380px, 90vw);
     text-align: center;
+    box-shadow: 0 24px 80px rgba(0,0,0,.6);
   }
   .user-picker h2 { margin: 0 0 6px; font-size: 17px; color: var(--text); }
   .user-picker-sub { margin: 0 0 18px; font-size: 12px; color: var(--text-3); }
@@ -3392,6 +3395,12 @@ function showUserPicker() {
   if (ov) ov.style.display = 'flex';
 }
 document.addEventListener('DOMContentLoaded', () => {
+  // Re-parent the overlay to <body> — it ships inside the nav's container, whose
+  // stacking context caps any z-index we set (suggestion chips painted over it;
+  // verified via Chrome June 2026). As a direct body child + max z-index it
+  // reliably covers everything.
+  const ovEl = document.getElementById('userPickerOverlay');
+  if (ovEl && ovEl.parentElement !== document.body) document.body.appendChild(ovEl);
   const u = nizoUser();
   const chip = document.getElementById('userChip');
   if (chip) {
@@ -3412,7 +3421,9 @@ document.addEventListener('DOMContentLoaded', () => {
     setNizoUser(id, name);
     location.reload();
   });
-  if (!u) showUserPicker();   // first visit on this browser → ask who you are
+  // Solo-first: default silently to the owner identity instead of interrupting
+  // with a picker. The 👤 chip opens the picker when family actually needs it.
+  if (!u) setNizoUser('web-user', 'Kislay');
 });
 
 // =================== state ===================

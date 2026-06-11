@@ -73,6 +73,8 @@ public final class Bootstrap implements AutoCloseable {
     public final SqliteSessionStore sessions;
     public final UserFactStore userFacts;
     public final StockReportStore stockReports;
+    public final ai.nizo.agent.deepwork.JobStore deepJobs;
+    public final ai.nizo.agent.deepwork.DeepWorkEngine deepWork;
     public final FileCache fileCache;
     public final ToolRegistry tools;
     public final List<SkillManifest> skills;
@@ -91,6 +93,7 @@ public final class Bootstrap implements AutoCloseable {
         this.sessions = new SqliteSessionStore(home.sessionsDb());
         this.userFacts = new SqliteUserFactStore(home.memoryDb());
         this.stockReports = new StockReportStore(home.stockReportsDb());
+        this.deepJobs = new ai.nizo.agent.deepwork.JobStore(home.root().resolve("deep_work.db"));
         this.fileCache = new InMemoryFileCache();
 
         SkillLoader skillLoader = new SkillLoader();
@@ -102,6 +105,9 @@ public final class Bootstrap implements AutoCloseable {
         // via WebChannel's /api/usage for the UI.
         this.usage = new UsageTracker();
         java.util.function.Function<Tool, Tool> measure = t -> new MeasuredTool(t, usage);
+
+        // Registered now, bound to the engine after the registry exists (see below).
+        ai.nizo.agent.deepwork.DeepWorkTool deepWorkTool = new ai.nizo.agent.deepwork.DeepWorkTool();
 
         // Tier-0 PRIMARY data source: FMP. Constructed up-front so we can wire it into
         // HistoricalPriceTool as the rate-limit fallback.
@@ -147,6 +153,8 @@ public final class Bootstrap implements AutoCloseable {
                 .add(measure.apply(new StockFundamentalsTool(yahooQs, screenerInClient)))  // 4y financial statements + key stats
                 .add(measure.apply(new AnalystRatingsTool(yahooQs)))      // sell-side consensus + price targets
                 .add(measure.apply(new ai.nizo.tools.finance.StockNewsTool()))  // company news via Finnhub API (no scraping)
+                .add(measure.apply(deepWorkTool))                               // long-horizon background jobs (plan→execute→verify)
+                .add(measure.apply(new ai.nizo.agent.deepwork.JobStatusTool(deepJobs)))
                 .add(measure.apply(new InsiderActivityTool(yahooQs)))     // insider buys/sells
                 .add(measure.apply(new EarningsHistoryTool(yahooQs)))     // beat/miss + next reporting date
                 .add(measure.apply(buffettScoreTool))                     // Buffett-Munger 0-100 scorecard (no LLM)
@@ -246,6 +254,19 @@ public final class Bootstrap implements AutoCloseable {
                 systemPrompt,
                 maxIterations,
                 historyMessages);
+
+        // Reflective Phase — post-task self-learning (skills + user facts). Optional by
+        // design: NIZO_REFLECT=0 disables, and the engine no-ops on trivial turns.
+        agent.setReflection(new ai.nizo.agent.reflect.ReflectionEngine(
+                llmClient, llmConfig.model(), home.skillsDir(), userFacts));
+
+        // Deep Work — long-horizon background jobs. The engine needs the FINISHED tool
+        // registry (its steps call tools), while the deep_work tool had to be registered
+        // while the registry was still being built — hence the late bind() + boot resume.
+        this.deepWork = new ai.nizo.agent.deepwork.DeepWorkEngine(
+                llmClient, llmConfig.model(), tools, deepJobs, sessions);
+        deepWorkTool.bind(deepWork);
+        deepWork.resumeAll();
 
         // Server-owned per-chat workers — this is what makes "leave the page, come back, see
         // results" work. The chat keeps running in a virtual thread regardless of which (if any)

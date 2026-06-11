@@ -136,6 +136,8 @@ public final class AgentLoop implements ChatHandler {
     private final UserFactStore userFacts;   // nullable; null = no cross-session memory
     private final CondenseEngine condense;   // nullable; null = no auto/reactive condense
     private final StockReportStore stockReports;  // nullable; null = don't persist
+    /** Post-task reflective phase; nullable + settable so wiring stays optional. */
+    private volatile ai.nizo.agent.reflect.ReflectionEngine reflection;
     private final String model;
     private final String systemPrompt;
     private final int maxIterations;
@@ -201,6 +203,7 @@ public final class AgentLoop implements ChatHandler {
 
     public CondenseEngine condenseEngine() { return condense; }
     public String systemPrompt() { return systemPrompt; }
+    public void setReflection(ai.nizo.agent.reflect.ReflectionEngine r) { this.reflection = r; }
 
     @Override
     public OutgoingMessage handle(IncomingMessage in) {
@@ -257,6 +260,10 @@ public final class AgentLoop implements ChatHandler {
         boolean verbatimShortCircuit = false;
 
         sessions.append(in.chatId(), userMessage, in.userId());
+
+        // Compact per-turn trajectory for the post-task Reflective Phase — one line per
+        // tool call. Bounded so a 75-call pipeline can't balloon the reflection prompt.
+        List<String> trajectoryLines = new ArrayList<>();
 
         int iteration = 0;
         int totalTools = 0;
@@ -394,6 +401,7 @@ public final class AgentLoop implements ChatHandler {
                     // Re-bind both contexts on this virtual thread so nested tools (sub-agents,
                     // deterministic orchestrators) can read them.
                     ai.nizo.api.tool.UserContext.set(userId);
+                    ai.nizo.api.tool.UserContext.setChat(in.chatId());
                     ai.nizo.api.agent.AgentEventContext.set(capturedSink);
                     long ts = System.nanoTime();
                     try {
@@ -420,6 +428,16 @@ public final class AgentLoop implements ChatHandler {
                 }
                 sink.emit(new AgentEvent.ToolCallResult(iteration, tr.call.id(), tr.call.name(),
                         tr.result.ok(), tr.result.content(), tr.elapsedMs));
+
+                if (trajectoryLines.size() < 30) {
+                    String argsPrev = tr.call.argumentsJson() == null ? "" : tr.call.argumentsJson();
+                    if (argsPrev.length() > 120) argsPrev = argsPrev.substring(0, 120) + "…";
+                    String resPrev = tr.result.content() == null ? "" : tr.result.content();
+                    resPrev = resPrev.replaceAll("\\s+", " ");
+                    if (resPrev.length() > 100) resPrev = resPrev.substring(0, 100) + "…";
+                    trajectoryLines.add(tr.call.name() + " " + argsPrev + " → "
+                            + (tr.result.ok() ? "ok" : "ERROR") + " " + tr.elapsedMs + "ms · " + resPrev);
+                }
 
                 // ── Verbatim short-circuit: a tool may return content prefixed with the
                 //    DeterministicStockOrchestratorTool.VERBATIM_MARKER, signalling "use this
@@ -578,6 +596,16 @@ public final class AgentLoop implements ChatHandler {
             } catch (Exception e) {
                 LOG.warn("stock-report save failed for {}: {}", in.chatId(), e.toString());
             }
+        }
+
+        // Reflective Phase — fire-and-forget; gates + single-flight live inside the engine.
+        if (reflection != null && finalContent != null) {
+            reflection.maybeReflect(new ai.nizo.agent.reflect.ReflectionEngine.Trajectory(
+                    in.chatId(), in.userId(), in.channel(),
+                    in.text() == null ? "" : in.text(),
+                    List.copyOf(trajectoryLines),
+                    finalContent.substring(0, Math.min(600, finalContent.length())),
+                    iteration + 1, totalTools, ms, stopReason));
         }
     }
 
