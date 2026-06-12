@@ -1018,9 +1018,24 @@ public final class WebChannel implements AutoCloseable {
         byte[] body;
         try (InputStream is = ex.getRequestBody()) { body = is.readAllBytes(); }
         try {
+            // Timeout must exceed worst-case render time or the proxy 502s while the
+            // sidecar is still working (June 2026: a 1-min YuE song took 301.1s against
+            // a 5-min timeout — missed by ONE second; the finished mp3 never reached
+            // the browser). YuE ≈ 3 min per song-minute + model (re)load; MusicGen
+            // large can take a few minutes too.
+            boolean isYue = false;
+            int nSegments = 2;
+            try {
+                JsonNode req = mapper.readTree(body);
+                isYue = "yue".equalsIgnoreCase(req.path("engine").asText(""));
+                nSegments = Math.max(2, Math.min(8, req.path("n_segments").asInt(2)));
+            } catch (Exception ignore) {}
+            java.time.Duration timeout = isYue
+                    ? java.time.Duration.ofMinutes(Math.max(20, nSegments * 3L * 3 / 2 + 8))
+                    : java.time.Duration.ofMinutes(10);
             java.net.http.HttpResponse<byte[]> r = VOICE_HTTP.send(
                     java.net.http.HttpRequest.newBuilder(java.net.URI.create(VOICE_BASE + "/compose"))
-                            .timeout(java.time.Duration.ofMinutes(5))
+                            .timeout(timeout)
                             .header("Content-Type", "application/json")
                             .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(body))
                             .build(),

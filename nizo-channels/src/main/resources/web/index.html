@@ -638,6 +638,11 @@
   .music-view {
     padding: 28px 32px; max-width: 920px; margin: 0 auto; width: 100%;
     display: flex; flex-direction: column; gap: 18px;
+    /* body is overflow:hidden (fixed-viewport app shell) — every view must own
+       its scrolling. Without these two lines the Library below the fold was
+       simply clipped (June 2026). */
+    min-height: 0;
+    overflow-y: auto;
   }
   .music-prompt-card, .music-controls-card {
     background: var(--surface-1, rgba(255,255,255,0.04));
