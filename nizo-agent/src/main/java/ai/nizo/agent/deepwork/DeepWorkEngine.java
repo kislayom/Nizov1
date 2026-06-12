@@ -254,11 +254,23 @@ public final class DeepWorkEngine {
                 String content = r.content() == null ? "" : r.content();
                 if (content.length() > TOOL_RESULT_CAP) content = content.substring(0, TOOL_RESULT_CAP) + "…[truncated]";
                 messages.add(ChatMessage.toolResult(call.id(), content));
+                // The verifier judges groundedness against THIS trail — starving it caused
+                // false rejections of legitimately-derived numbers (June 2026 first run:
+                // 400-char fragments showed only 'revenue…' header stubs). 1500/call keeps
+                // the actual figures visible while bounding the verify prompt.
                 evidence.append("[").append(call.name()).append("] ")
-                        .append(truncate(content, 400)).append('\n');
+                        .append(truncate(content, 1_500)).append('\n');
             }
         }
-        throw new IllegalStateException("step exceeded " + MAX_ROUNDS_PER_STEP + " tool rounds without concluding");
+        // Round budget exhausted — force a conclusion from gathered evidence instead of
+        // throwing (a throw burned a whole attempt; the evidence is usually sufficient,
+        // the model just kept gathering — verified June 2026, steps 3+4 first run).
+        messages.add(ChatMessage.user("Round budget exhausted. Write your STEP RESULT now "
+                + "using ONLY the evidence already gathered above. No more tool calls."));
+        ChatResponse fin = chatResilient(new ChatRequest(model, messages, List.of(), null, 3_000, false, NO_THINK));
+        String result = fin.content() == null ? "" : fin.content().trim();
+        if (result.isEmpty()) throw new IllegalStateException("step produced no result after round budget");
+        return new StepOutcome(result, evidence.toString(), calls);
     }
 
     // ───────────────────────────── verification ─────────────────────────────
@@ -269,7 +281,7 @@ public final class DeepWorkEngine {
         String ask = "Step: " + stepTitle
                 + "\n\nClaimed result:\n" + truncate(out.result(), 3_000)
                 + "\n\nTool evidence collected during the step:\n"
-                + (out.evidence().isBlank() ? "(none — no tools were called)" : truncate(out.evidence(), 4_000));
+                + (out.evidence().isBlank() ? "(none — no tools were called)" : truncate(out.evidence(), 14_000));
         ChatResponse resp = chatResilient(ChatRequest.of(model, List.of(
                 ChatMessage.system(VERIFY_SYSTEM), ChatMessage.user(ask)))
                 .withMaxTokens(300).withExtraBody(NO_THINK));
@@ -395,9 +407,12 @@ public final class DeepWorkEngine {
             You are executing ONE step of a long job with machine-level accuracy standards.
             Use tools to gather real data — every number and claim in your result must come
             from a tool output in THIS step (or an earlier step's summary given to you).
-            When you have enough evidence, reply WITHOUT tool calls: a dense result for
-            this step only — concrete findings, numbers with units, and name the source
-            tool for key figures (e.g. "revenue ₹2.4L Cr (stock_fundamentals)").
+            You have AT MOST 8 tool rounds — gather efficiently (batch related lookups in
+            one round) and CONCLUDE EARLY: as soon as the evidence covers the step, reply
+            WITHOUT tool calls. Your reply is the step result: dense, concrete findings,
+            numbers with units, and name the source tool for key figures
+            (e.g. "revenue ₹2.4L Cr (stock_fundamentals)"). Copy exact figures from tool
+            outputs into your result — the verifier checks them against the evidence.
             Do not pad. Do not do other steps' work. If a tool fails, try ONE alternative
             tool, then report what you could and couldn't get.
             """;
