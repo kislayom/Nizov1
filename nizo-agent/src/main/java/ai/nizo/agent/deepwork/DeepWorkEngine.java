@@ -126,7 +126,7 @@ public final class DeepWorkEngine {
                 + (deliverable == null || deliverable.isBlank() ? "" : "\nRequested deliverable: " + deliverable)
                 + "\n\nAvailable tool names: " + String.join(", ",
                         tools.all().stream().map(Tool::name).filter(n -> !n.startsWith("deep_work") && !n.startsWith("job_")).toList());
-        ChatResponse resp = llm.chat(ChatRequest.of(model, List.of(
+        ChatResponse resp = chatResilient(ChatRequest.of(model, List.of(
                 ChatMessage.system(PLAN_SYSTEM), ChatMessage.user(ask)))
                 .withMaxTokens(900).withExtraBody(NO_THINK));
         JsonNode arr = extractJson(resp.content());
@@ -229,7 +229,7 @@ public final class DeepWorkEngine {
         StringBuilder evidence = new StringBuilder();
         int calls = 0;
         for (int round = 0; round < MAX_ROUNDS_PER_STEP; round++) {
-            ChatResponse resp = llm.chat(new ChatRequest(model, messages, defs, null, 3_000, false, NO_THINK));
+            ChatResponse resp = chatResilient(new ChatRequest(model, messages, defs, null, 3_000, false, NO_THINK));
             if (!resp.hasToolCalls()) {
                 String result = resp.content() == null ? "" : resp.content().trim();
                 if (result.isEmpty()) throw new IllegalStateException("step produced empty result");
@@ -270,7 +270,7 @@ public final class DeepWorkEngine {
                 + "\n\nClaimed result:\n" + truncate(out.result(), 3_000)
                 + "\n\nTool evidence collected during the step:\n"
                 + (out.evidence().isBlank() ? "(none — no tools were called)" : truncate(out.evidence(), 4_000));
-        ChatResponse resp = llm.chat(ChatRequest.of(model, List.of(
+        ChatResponse resp = chatResilient(ChatRequest.of(model, List.of(
                 ChatMessage.system(VERIFY_SYSTEM), ChatMessage.user(ask)))
                 .withMaxTokens(300).withExtraBody(NO_THINK));
         JsonNode v = extractJson(resp.content());
@@ -293,7 +293,7 @@ public final class DeepWorkEngine {
             else if (JobStore.StepStatus.FAIL.name().equals(s.status()))
                 sb.append("(FAILED verification: ").append(s.verifyNote()).append(")\n");
         }
-        ChatResponse resp = llm.chat(ChatRequest.of(model, List.of(
+        ChatResponse resp = chatResilient(ChatRequest.of(model, List.of(
                 ChatMessage.system(SYNTH_SYSTEM), ChatMessage.user(sb.toString())))
                 .withMaxTokens(4_500).withExtraBody(NO_THINK));
         String out = resp.content() == null ? "" : resp.content().trim();
@@ -308,6 +308,58 @@ public final class DeepWorkEngine {
         } catch (Exception e) {
             LOG.warn("deep-work {} delivery failed: {}", job.id(), e.toString());
         }
+    }
+
+    // ───────────────────────────── LLM transport resilience ─────────────────────────────
+
+    /**
+     * llm.chat with backoff on TRANSPORT failures (server down / connection refused /
+     * timeout). Two real scenarios this must survive:
+     * <ul>
+     *   <li><b>Cold boot</b> — nizo-app starts in ~5s, llama-server needs ~90s to load
+     *       33GB of Qwen into VRAM. Resumed jobs' first calls land on a dead port.
+     *       (Verified June 2026: a resumed job burned all 6 steps × 2 attempts in
+     *       seconds and self-FAILED.)</li>
+     *   <li><b>llama_paused()</b> — YuE song generation stops llama for ~13 min.</li>
+     * </ul>
+     * Backoff: 15s,30s,60s,2m,4m,4m,4m ≈ 15.7 min total before giving up. Transport
+     * retries do NOT consume step attempts — only verification rejections do.
+     */
+    private ChatResponse chatResilient(ChatRequest req) throws Exception {
+        long[] waits = {15_000, 30_000, 60_000, 120_000, 240_000, 240_000, 240_000};
+        Exception last = null;
+        for (int i = 0; i <= waits.length; i++) {
+            try {
+                return llm.chat(req);
+            } catch (Exception e) {
+                if (!isTransport(e)) throw e;     // model errors propagate immediately
+                last = e;
+                if (i == waits.length) break;
+                LOG.info("deep-work: LLM unreachable ({}), waiting {}s (retry {}/{})",
+                        brief(e), waits[i] / 1000, i + 1, waits.length);
+                Thread.sleep(waits[i]);
+            }
+        }
+        throw new IllegalStateException("LLM unreachable after ~16 min of retries: " + brief(last));
+    }
+
+    private static boolean isTransport(Exception e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.net.ConnectException
+                    || t instanceof java.net.http.HttpConnectTimeoutException
+                    || t instanceof java.net.http.HttpTimeoutException
+                    || t instanceof java.io.IOException) return true;
+            String m = t.getMessage();
+            if (m != null && (m.contains("LLM request failed") || m.contains("Connection refused")
+                    || m.contains("connection was closed") || m.contains("GOAWAY"))) return true;
+        }
+        return false;
+    }
+
+    private static String brief(Exception e) {
+        if (e == null) return "?";
+        String m = e.getMessage();
+        return e.getClass().getSimpleName() + (m == null ? "" : ": " + (m.length() > 80 ? m.substring(0, 80) : m));
     }
 
     // ───────────────────────────── helpers + prompts ─────────────────────────────
