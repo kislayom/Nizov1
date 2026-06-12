@@ -920,6 +920,22 @@ def compose_with_yue(*, prompt: str, final_prompt: str, lyrics: str,
     with open(mp3_path, "rb") as f: data = f.read()
     log.info("YuE done in %.1fs: %s (%d bytes)", elapsed, mp3_path, len(data))
 
+    # Persist the expensive artifact OUTSIDE /tmp before replying. A reboot wiped a
+    # finished 5-minute render once (June 2026) because /tmp is volatile and the
+    # proxy had already 502'd — the song existed and nobody could ever fetch it.
+    # ~/.nizo/music-out/ is included in the nightly backup tar.
+    try:
+        import shutil, re as _re
+        out_dir = Path.home() / ".nizo" / "music-out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = __import__("datetime").datetime.now().strftime("%Y%m%d-%H%M%S")
+        safe = _re.sub(r"[^a-zA-Z0-9]+", "-", (prompt or "song"))[:60].strip("-")
+        keep = out_dir / f"{stamp}-yue-{safe}.mp3"
+        shutil.copyfile(mp3_path, keep)
+        log.info("YuE artifact persisted: %s", keep)
+    except Exception as e:
+        log.warning("YuE artifact persistence failed (non-fatal): %s", e)
+
     return JSONResponse({
         "wavBase64": base64.b64encode(data).decode("ascii"),
         "engine": "yue-7b",
