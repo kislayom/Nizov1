@@ -267,6 +267,13 @@ public final class Bootstrap implements AutoCloseable {
         agent.setReflection(new ai.nizo.agent.reflect.ReflectionEngine(
                 llmClient, llmConfig.model(), home.skillsDir(), userFacts));
 
+        // Skill curation — the other half of the self-learning loop. Reflection WRITES skills;
+        // this grades them and reversibly retires the vacuous/overfit/duplicative ones on a
+        // schedule (Hermes "writes, grades, prunes"). Daemon-scheduled; NIZO_SKILL_CURATOR=off disables.
+        if (ai.nizo.agent.reflect.SkillCurator.enabled()) {
+            new ai.nizo.agent.reflect.SkillCurator(llmClient, llmConfig.model(), home.skillsDir()).start();
+        }
+
         // Deep Work — long-horizon background jobs. The engine needs the FINISHED tool
         // registry (its steps call tools), while the deep_work tool had to be registered
         // while the registry was still being built — hence the late bind() + boot resume.
