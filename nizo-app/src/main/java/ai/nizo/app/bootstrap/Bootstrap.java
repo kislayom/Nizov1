@@ -77,6 +77,7 @@ public final class Bootstrap implements AutoCloseable {
     public final UserFactStore userFacts;
     public final StockReportStore stockReports;
     public final ai.nizo.agent.deepwork.JobStore deepJobs;
+    public final ai.nizo.agent.schedule.ScheduleStore schedules;
     public final ai.nizo.agent.deepwork.DeepWorkEngine deepWork;
     public final FileCache fileCache;
     public final ToolRegistry tools;
@@ -109,6 +110,7 @@ public final class Bootstrap implements AutoCloseable {
         this.userFacts = new SqliteUserFactStore(home.memoryDb());
         this.stockReports = new StockReportStore(home.stockReportsDb());
         this.deepJobs = new ai.nizo.agent.deepwork.JobStore(home.root().resolve("deep_work.db"));
+        this.schedules = new ai.nizo.agent.schedule.ScheduleStore(home.root().resolve("scheduler.db"));
         this.fileCache = new InMemoryFileCache();
 
         SkillLoader skillLoader = new SkillLoader();
@@ -171,6 +173,7 @@ public final class Bootstrap implements AutoCloseable {
                 .add(measure.apply(new ai.nizo.tools.finance.StockNewsTool()))  // company news via Finnhub API (no scraping)
                 .add(measure.apply(deepWorkTool))                               // long-horizon background jobs (plan→execute→verify)
                 .add(measure.apply(new ai.nizo.agent.deepwork.JobStatusTool(deepJobs)))
+                .add(measure.apply(new ai.nizo.agent.schedule.ScheduleTool(schedules, java.time.ZoneId.systemDefault())))
                 .add(measure.apply(new InsiderActivityTool(yahooQs)))     // insider buys/sells
                 .add(measure.apply(new EarningsHistoryTool(yahooQs)))     // beat/miss + next reporting date
                 .add(measure.apply(buffettScoreTool))                     // Buffett-Munger 0-100 scorecard (no LLM)
@@ -301,6 +304,22 @@ public final class Bootstrap implements AutoCloseable {
         // results" work. The chat keeps running in a virtual thread regardless of which (if any)
         // SSE subscribers are currently attached.
         this.chatExecutor = new ChatExecutor(agent);
+
+        // Scheduler — fire reminders / recurring jobs, delivering each by running the stored prompt
+        // through the agent into its chat. Daemon-ticked; schedules survive restart via the store.
+        ai.nizo.agent.schedule.ScheduleRunner schedRunner = task -> {
+            ai.nizo.api.tool.UserContext.set(task.userId());
+            ai.nizo.api.tool.UserContext.setChat(task.chatId());
+            try {
+                agent.handle(new ai.nizo.api.chat.IncomingMessage(
+                        task.userId(), task.chatId(), task.prompt(), java.util.List.of(), "schedule"));
+            } finally {
+                ai.nizo.api.tool.UserContext.clear();
+            }
+        };
+        new ai.nizo.agent.schedule.SchedulerEngine(schedules, schedRunner,
+                java.time.ZoneId.systemDefault(),
+                java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()).start();
 
         LOG.info("bootstrap ready: home={} model={} tools={} (mcp={}) skills={} condense=on",
                 home.root(), llmConfig.model(), tools.all().size(), mcpAdded, skills.size());

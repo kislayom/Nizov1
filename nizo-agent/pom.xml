@@ -30,6 +30,10 @@
             <artifactId>nizo-tools</artifactId>
         </dependency>
         <dependency>
+            <groupId>ai.nizo</groupId>
+            <artifactId>nizo-scheduler</artifactId>
+        </dependency>
+        <dependency>
             <groupId>ai.nizo.memory</groupId>
             <artifactId>nizo-memory-api</artifactId>
         </dependency>
