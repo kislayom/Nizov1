@@ -23,6 +23,7 @@ import ai.nizo.skills.SaveSkillTool;
 import ai.nizo.skills.SkillLoader;
 import ai.nizo.skills.SkillManifest;
 import ai.nizo.skills.SubAgentSkillTool;
+import ai.nizo.tools.code.CodeExecTool;
 import ai.nizo.tools.file.FileListTool;
 import ai.nizo.tools.file.FileReadTool;
 import ai.nizo.tools.file.FileWriteTool;
@@ -169,6 +170,7 @@ public final class Bootstrap implements AutoCloseable {
                 .add(measure.apply(new FileWriteTool(home.workspace())))
                 .add(measure.apply(new FileListTool(home.workspace())))
                 .add(measure.apply(new ShellTool(home.workspace())))
+                .add(measure.apply(new CodeExecTool(home.workspace())))  // compute exact numbers — don't guess
                 .add(measure.apply(new MemoryRememberTool(userFacts)))
                 .add(measure.apply(new MemoryRecallTool(userFacts)))
                 .add(measure.apply(new MemoryForgetTool(userFacts)))

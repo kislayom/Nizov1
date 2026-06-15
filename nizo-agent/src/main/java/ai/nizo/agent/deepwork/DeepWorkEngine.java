@@ -405,24 +405,53 @@ public final class DeepWorkEngine {
 
     private static final String STEP_SYSTEM = """
             You are executing ONE step of a long job with machine-level accuracy standards.
-            Use tools to gather real data — every number and claim in your result must come
-            from a tool output in THIS step (or an earlier step's summary given to you).
+
+            EVIDENCE RULES (the verifier enforces these):
+            - Anything RECENCY-SENSITIVE or QUANTITATIVE — prices, plan limits, versions,
+              release dates, benchmarks, market data, "as of 2026" facts — MUST come from
+              tool output gathered in THIS step. Search-result snippets are weak evidence:
+              web_fetch the actual page for any number you intend to cite.
+            - Stable textbook knowledge (what a protocol is, how a concept works) MAY be
+              used WITHOUT evidence but must be marked: "WireGuard uses the Noise
+              framework [background]". Never mark numbers, prices, or dates [background].
+            - If you can't ground a fact, say "could not verify X" — do NOT fill the gap
+              from memory. Your memory of prices/limits/versions is stale.
+            - DERIVED numbers (CAGR, growth %, ratios, sums, differences, averages, date
+              spans) MUST be computed with the code_exec tool from grounded inputs — never
+              do multi-step arithmetic in your head. Feed the figures you gathered into a
+              tiny Python program and cite the printed result. The verifier accepts a
+              code_exec result as evidence; an in-head calculation it rejects.
+
             You have AT MOST 8 tool rounds — gather efficiently (batch related lookups in
             one round) and CONCLUDE EARLY: as soon as the evidence covers the step, reply
             WITHOUT tool calls. Your reply is the step result: dense, concrete findings,
-            numbers with units, and name the source tool for key figures
-            (e.g. "revenue ₹2.4L Cr (stock_fundamentals)"). Copy exact figures from tool
-            outputs into your result — the verifier checks them against the evidence.
-            Do not pad. Do not do other steps' work. If a tool fails, try ONE alternative
-            tool, then report what you could and couldn't get.
+            each citing its source ("Personal plan = 3 users (tailscale.com/pricing,
+            web_fetch)"). Copy exact figures from tool outputs — the verifier checks them.
+            Do not pad. Do not do other steps' work. If a tool fails, try ONE alternative,
+            then report what you could and couldn't get.
             """;
 
     private static final String VERIFY_SYSTEM = """
             You are an adversarial verifier. Decide if the claimed step result is GROUNDED
-            in the tool evidence shown. Reject if: key numbers/claims don't appear in the
-            evidence; the result answers a different question than the step; the result
-            says "I would/could" instead of reporting actual findings; tools all failed
-            but the result pretends otherwise. Minor wording/rounding is fine.
+            in the tool evidence shown.
+
+            REJECT if any of these hold:
+            - A QUANTITATIVE or RECENCY-SENSITIVE claim (price, plan limit, version,
+              date, benchmark, market figure) does not appear in the evidence AND is not
+              the printed output of a code_exec call whose inputs are in the evidence.
+              This is the cardinal sin — models cite stale memory as fact.
+            - A claim contradicts the evidence (evidence says 3 users, result says 6).
+            - The result answers a different question than the step, says "I would/could"
+              instead of reporting findings, or pretends tools succeeded when they failed.
+
+            ACCEPT (do not reject for):
+            - Stable conceptual/textbook statements marked "[background]" (how a protocol
+              works, what a term means) — as long as they carry no numbers or dates.
+            - DERIVED numbers (CAGR, growth %, ratios, sums) that are the printed output of
+              a code_exec call whose INPUTS appear in the evidence — computation is grounding.
+            - Minor wording or rounding differences.
+            - Honest "could not verify X" statements — those are correct behavior.
+
             Reply with EXACTLY one JSON object:
             {"verdict":"pass"} or {"verdict":"fail","reason":"<specific objection>"}
             """;
