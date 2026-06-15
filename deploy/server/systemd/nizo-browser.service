@@ -1,0 +1,28 @@
+[Unit]
+Description=Nizo browser sidecar — Playwright Chromium on :7781
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kislay
+Group=kislay
+WorkingDirectory=/home/kislay/nizo_v1/deploy/server
+
+Environment=PATH=/usr/local/bin:/usr/bin
+Environment=BROWSER_HEADLESS=1
+EnvironmentFile=-/home/kislay/.nizo/.env
+
+ExecStart=/mnt/ai-models/envs/browser/bin/python -m uvicorn browser_sidecar:app --host 127.0.0.1 --port 7781
+
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=20
+
+StartLimitIntervalSec=300
+StartLimitBurst=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

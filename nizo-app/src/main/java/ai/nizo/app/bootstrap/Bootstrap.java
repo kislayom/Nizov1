@@ -160,6 +160,7 @@ public final class Bootstrap implements AutoCloseable {
                 .add(measure.apply(new CurrentTimeTool()))
                 .add(measure.apply(new WebSearchTool()))
                 .add(measure.apply(new WebFetchTool()))
+                .add(measure.apply(new ai.nizo.tools.web.BrowserTool()))  // headless browser (Playwright sidecar) for JS/interactive sites
                 .add(measure.apply(new WikipediaTool()))
                 .add(measure.apply(new HttpJsonTool()))          // generic JSON HTTP — reusable for any API
                 .add(measure.apply(new StockQuoteTool()))        // live quotes via Yahoo Finance public JSON
