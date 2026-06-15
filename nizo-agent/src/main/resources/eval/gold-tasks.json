@@ -1,0 +1,36 @@
+[
+  {
+    "id": "cagr",
+    "prompt": "Compute the CAGR (compound annual growth rate) of an investment that grows from 100 to 200 over exactly 10 years. Reply with the percentage to two decimal places.",
+    "check": "numeric",
+    "expected": "7.18",
+    "tolerance": 0.06
+  },
+  {
+    "id": "mean",
+    "prompt": "What is the arithmetic mean of these numbers: 4, 8, 15, 16, 23, 42? Give the exact value.",
+    "check": "numeric",
+    "expected": "18.00",
+    "tolerance": 0.01
+  },
+  {
+    "id": "compound",
+    "prompt": "If you invest 5000 at 7% annual interest compounded annually for 8 years, what is the final amount? Round to the nearest whole number.",
+    "check": "numeric",
+    "expected": "8591",
+    "tolerance": 3
+  },
+  {
+    "id": "pct-change",
+    "prompt": "A stock rose from 250.00 to 312.50. By what percent did it increase? Reply with the percentage.",
+    "check": "numeric",
+    "expected": "25.00",
+    "tolerance": 0.05
+  },
+  {
+    "id": "wireguard",
+    "prompt": "What cryptographic framework does the WireGuard protocol use as the foundation of its handshake? Answer in one or two words.",
+    "check": "contains",
+    "expected": "Noise"
+  }
+]
