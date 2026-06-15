@@ -35,6 +35,27 @@
     "tolerance": 0.5
   },
   {
+    "id": "date-diff",
+    "prompt": "How many days are there from 2026-01-01 to 2026-03-01 (the number of days between those two dates)?",
+    "check": "numeric",
+    "expected": "59",
+    "tolerance": 0
+  },
+  {
+    "id": "ratio-pct",
+    "prompt": "Express 17 out of 200 as a percentage, to two decimal places.",
+    "check": "numeric",
+    "expected": "8.50",
+    "tolerance": 0.01
+  },
+  {
+    "id": "https-port",
+    "prompt": "What TCP port does HTTPS use by default?",
+    "check": "numeric",
+    "expected": "443",
+    "tolerance": 0
+  },
+  {
     "id": "wireguard",
     "prompt": "What cryptographic framework does the WireGuard protocol use as the foundation of its handshake? Answer in one or two words.",
     "check": "contains",
