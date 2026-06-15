@@ -340,8 +340,13 @@ public final class AgentLoop implements ChatHandler {
                 LOG.warn("streamChat failed at iter {}: {}", iteration, e.toString());
                 // Map common transport errors to friendlier messages so the UI is useful.
                 String userFacing;
+                // FailoverLlmClient's friendly "unavailable" message sits mid-chain — rootCause()
+                // digs past it to the raw socket error (often empty message) — so scan the chain.
+                String unavailableMsg = chainMessageContaining(e, "temporarily unavailable");
                 String lower = causeMsg.toLowerCase();
-                if (lower.contains("error in input stream") || lower.contains("connection reset")
+                if (unavailableMsg != null) {
+                    userFacing = unavailableMsg;
+                } else if (lower.contains("error in input stream") || lower.contains("connection reset")
                         || lower.contains("broken pipe")) {
                     userFacing = "The model dropped the connection mid-stream. This usually means the "
                             + "request hit the HTTP read timeout (try a shorter prompt or set "
@@ -775,6 +780,21 @@ public final class AgentLoop implements ChatHandler {
         Throwable c = t;
         while (c.getCause() != null && c.getCause() != c) c = c.getCause();
         return c;
+    }
+
+    /**
+     * Deepest message in the cause chain containing {@code needle} (case-insensitive), else null.
+     * Deepest, not first: an {@code ExecutionException} wrapper's message is its cause's
+     * {@code toString()} (class-name-prefixed), so the clean message lives further down.
+     */
+    private static String chainMessageContaining(Throwable e, String needle) {
+        String n = needle.toLowerCase();
+        String found = null;
+        for (Throwable t = e; t != null && t.getCause() != t; t = t.getCause()) {
+            String m = t.getMessage();
+            if (m != null && m.toLowerCase().contains(n)) found = m;
+        }
+        return found;
     }
 
     /** Sink that materialises just the final reply, for the blocking {@link #handle} path. */

@@ -16,6 +16,8 @@ import ai.nizo.api.tool.ToolRegistry;
 import ai.nizo.mcp.client.McpClientPool;
 import ai.nizo.mcp.config.McpServersFile;
 import ai.nizo.app.config.NizoHome;
+import ai.nizo.api.llm.LlmClient;
+import ai.nizo.llm.FailoverLlmClient;
 import ai.nizo.llm.LlmConfig;
 import ai.nizo.llm.OpenAiCompatibleClient;
 import ai.nizo.skills.FilesystemSkillTool;
@@ -70,7 +72,7 @@ public final class Bootstrap implements AutoCloseable {
 
     public final NizoHome home;
     public final LlmConfig llmConfig;
-    public final OpenAiCompatibleClient llmClient;
+    public final LlmClient llmClient;   // resilient wrapper (FailoverLlmClient) over the primary endpoint
     public final SqliteSessionStore sessions;
     public final UserFactStore userFacts;
     public final StockReportStore stockReports;
@@ -90,7 +92,19 @@ public final class Bootstrap implements AutoCloseable {
     public Bootstrap(String systemPrompt, int maxIterations, int historyMessages) {
         this.home = NizoHome.resolve();
         this.llmConfig = LlmConfig.fromEnv();
-        this.llmClient = new OpenAiCompatibleClient(llmConfig.baseUrl(), llmConfig.authToken());
+        OpenAiCompatibleClient primaryLlm = new OpenAiCompatibleClient(llmConfig.baseUrl(), llmConfig.authToken());
+        // Resilience layer: retry transport blips / the cold-start tail with short backoff and, if a
+        // second provider is configured, fail over to it. Local-first by default — a single provider
+        // makes this a pure retry wrapper that never leaves the box. A fallback engages ONLY if
+        // NIZO_LLM_FALLBACK_URL is set (opt-in; that one does send prompts off-box).
+        java.util.List<LlmClient> llmProviders = new java.util.ArrayList<>();
+        llmProviders.add(primaryLlm);
+        String fallbackUrl = System.getenv("NIZO_LLM_FALLBACK_URL");
+        if (fallbackUrl != null && !fallbackUrl.isBlank()) {
+            llmProviders.add(new OpenAiCompatibleClient(fallbackUrl.trim(), System.getenv("NIZO_LLM_FALLBACK_TOKEN")));
+            LOG.info("LLM fallback provider configured ({})", fallbackUrl.trim());
+        }
+        this.llmClient = new FailoverLlmClient(llmProviders, 2, new long[]{1000, 3000, 6000});
         this.sessions = new SqliteSessionStore(home.sessionsDb());
         this.userFacts = new SqliteUserFactStore(home.memoryDb());
         this.stockReports = new StockReportStore(home.stockReportsDb());
