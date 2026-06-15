@@ -284,6 +284,16 @@ async def act(req: ActReq):
             st["note"] = note or "no privacy-preserving consent control found"
             return {"ok": True, "sessionId": req.sessionId, **st}
 
+        if action == "screenshot":
+            # Save into the agent's workspace so the `image_analyze` vision tool can read it →
+            # visual fallback when the DOM is hard to parse.
+            shot_dir = os.getenv("BROWSER_SHOT_DIR", "/tmp")
+            os.makedirs(shot_dir, exist_ok=True)
+            name = "shot-" + uuid.uuid4().hex[:8] + ".png"
+            await page.screenshot(path=os.path.join(shot_dir, name), full_page=False)
+            return {"ok": True, "sessionId": req.sessionId, "url": page.url,
+                    "title": await page.title(), "screenshot": name}
+
         if action in ("back", "forward"):
             await (page.go_back() if action == "back" else page.go_forward())
             await page.wait_for_timeout(500)

@@ -76,8 +76,8 @@ public final class BrowserTool implements Tool {
             {
               "type": "object",
               "properties": {
-                "action":   { "type": "string", "enum": ["goto","read","click","type","wait","dismiss","back","close"],
-                              "description": "What to do in the browser. 'wait' waits for {selector} (or ~1.5s); 'dismiss' re-attempts cookie/consent dismissal." },
+                "action":   { "type": "string", "enum": ["goto","read","click","type","wait","dismiss","screenshot","back","close"],
+                              "description": "What to do. 'wait' waits for {selector} (or ~1.5s); 'dismiss' re-attempts consent; 'screenshot' saves a PNG to the workspace to view with image_analyze." },
                 "url":      { "type": "string", "description": "For goto: the URL to open." },
                 "selector": { "type": "string", "description": "CSS selector for click/type (preferred)." },
                 "text":     { "type": "string", "description": "For click: visible link/button text. For type: the text to enter." },
@@ -157,6 +157,11 @@ public final class BrowserTool implements Tool {
         sb.append("[browser ").append(action).append("] ").append(r.path("title").asText("")).append('\n');
         sb.append("URL: ").append(r.path("url").asText("")).append('\n');
         if (r.hasNonNull("note")) sb.append("note: ").append(r.path("note").asText("")).append('\n');
+        if (r.hasNonNull("screenshot")) {
+            String shot = r.path("screenshot").asText();
+            sb.append("screenshot saved: ").append(shot)
+              .append("  (view it with image_analyze path=\"").append(shot).append("\")\n");
+        }
         String text = r.path("text").asText("");
         if (!text.isBlank()) sb.append("---\n").append(text).append('\n');
         JsonNode controls = r.path("controls");
