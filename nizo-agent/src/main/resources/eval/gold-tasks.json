@@ -28,6 +28,13 @@
     "tolerance": 0.05
   },
   {
+    "id": "portfolio",
+    "prompt": "A portfolio holds three positions: 40 shares at $125.50, 15 shares at $88.20, and 60 shares at $42.75. What is the total portfolio value in dollars? Give the exact amount.",
+    "check": "numeric",
+    "expected": "8908.00",
+    "tolerance": 0.5
+  },
+  {
     "id": "wireguard",
     "prompt": "What cryptographic framework does the WireGuard protocol use as the foundation of its handshake? Answer in one or two words.",
     "check": "contains",

@@ -184,6 +184,11 @@ public final class Bootstrap implements AutoCloseable {
         // DeterministicStockOrchestratorTool). Needs the registry to dispatch sub-tools,
         // hence its registration is after the registryRef is allocated.
         builder.add(measure.apply(new ai.nizo.skills.IndiaTopPicksTool(registryRef::get)));
+        // General deep-agent: `research` delegates a focused sub-investigation to an isolated
+        // worker (fresh context, bounded tool loop, summary-return). Generalizes the stock
+        // pipeline's fan-out to any task; needs the registry to dispatch its inner tools.
+        builder.add(measure.apply(new ai.nizo.skills.DeepAgentTool(
+                llmClient, registryRef::get, llmConfig.model(), 8)));
         // Sub-agents get their own iteration cap, separate from the orchestrator's. 20 gives
         // enough headroom for analysts to fight through bot-blocks (DataDome, 404s, retries via
         // SmartProxy) before being asked to write — 12 was sometimes hit mid-research.
