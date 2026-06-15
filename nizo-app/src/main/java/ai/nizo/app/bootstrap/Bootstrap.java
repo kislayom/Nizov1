@@ -311,8 +311,12 @@ public final class Bootstrap implements AutoCloseable {
             ai.nizo.api.tool.UserContext.set(task.userId());
             ai.nizo.api.tool.UserContext.setChat(task.chatId());
             try {
-                agent.handle(new ai.nizo.api.chat.IncomingMessage(
+                ai.nizo.api.chat.OutgoingMessage out = agent.handle(new ai.nizo.api.chat.IncomingMessage(
                         task.userId(), task.chatId(), task.prompt(), java.util.List.of(), "schedule"));
+                // Proactive push so a reminder reaches the user even off the web UI (no-op without a bot token).
+                if (out != null && out.text() != null && !out.text().isBlank()) {
+                    ai.nizo.channels.telegram.TelegramNotifier.push(task.chatId(), "⏰ " + out.text());
+                }
             } finally {
                 ai.nizo.api.tool.UserContext.clear();
             }

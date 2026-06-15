@@ -160,8 +160,30 @@ public final class Main {
                 web.start();
                 System.err.println("[nizo] open " + web.url());
                 tryOpenBrowser(web.url());
-                blockUntilShutdown();
+                // Also serve Telegram alongside web if a bot token is configured (same agent/stores).
+                TelegramChannel tg = maybeStartTelegram(b);
+                try {
+                    blockUntilShutdown();
+                } finally {
+                    if (tg != null) try { tg.close(); } catch (Exception ignored) {}
+                }
             }
+        }
+    }
+
+    /** Start Telegram alongside the web server if TELEGRAM_BOT_TOKEN is set; null (web-only) otherwise. */
+    private static TelegramChannel maybeStartTelegram(Bootstrap b) {
+        String token = System.getenv("TELEGRAM_BOT_TOKEN");
+        if (token == null || token.isBlank()) return null;
+        try {
+            TelegramConfig cfg = TelegramConfig.fromEnv();
+            TelegramChannel tg = new TelegramChannel(cfg, b.agent);
+            tg.start();
+            System.err.println("[nizo] Telegram bot @" + cfg.botUsername() + " started alongside web");
+            return tg;
+        } catch (Exception e) {
+            System.err.println("[nizo] Telegram start failed (continuing web-only): " + e.getMessage());
+            return null;
         }
     }
 
