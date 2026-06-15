@@ -61,11 +61,13 @@ public final class BrowserTool implements Tool {
     public String description() {
         return "Drive a real headless web browser for JS-heavy sites and multi-step web tasks that "
                 + "web_fetch cannot do — it renders JavaScript, clicks, fills forms, and reads dynamic "
-                + "content, keeping a session across calls. Use it for app-like sites (e.g. building a "
-                + "grocery cart), pages that need rendering, or login-gated flows. It will NOT type "
-                + "passwords or payment details, and will NOT place an order / pay — it surfaces those "
-                + "for the human. Actions: goto {url}; read; click {selector|text}; type {selector,text,"
-                + "submit?}; back; close.";
+                + "content, keeping a session across calls. On goto it privacy-first dismisses cookie/"
+                + "consent banners and returns the page's INTERACTIVE CONTROLS (buttons/inputs with "
+                + "selectors) so you can target a search box or button precisely. Use it for app-like "
+                + "sites (e.g. building a grocery cart), pages needing rendering, or login-gated flows. "
+                + "It will NOT type passwords or payment details, and will NOT place an order / pay — it "
+                + "surfaces those for the human. Actions: goto {url}; read; click {selector|text}; "
+                + "type {selector,text,submit?}; wait {selector?}; dismiss; back; close.";
     }
 
     @Override
@@ -74,8 +76,8 @@ public final class BrowserTool implements Tool {
             {
               "type": "object",
               "properties": {
-                "action":   { "type": "string", "enum": ["goto","read","click","type","back","close"],
-                              "description": "What to do in the browser." },
+                "action":   { "type": "string", "enum": ["goto","read","click","type","wait","dismiss","back","close"],
+                              "description": "What to do in the browser. 'wait' waits for {selector} (or ~1.5s); 'dismiss' re-attempts cookie/consent dismissal." },
                 "url":      { "type": "string", "description": "For goto: the URL to open." },
                 "selector": { "type": "string", "description": "CSS selector for click/type (preferred)." },
                 "text":     { "type": "string", "description": "For click: visible link/button text. For type: the text to enter." },
@@ -154,14 +156,30 @@ public final class BrowserTool implements Tool {
         StringBuilder sb = new StringBuilder();
         sb.append("[browser ").append(action).append("] ").append(r.path("title").asText("")).append('\n');
         sb.append("URL: ").append(r.path("url").asText("")).append('\n');
+        if (r.hasNonNull("note")) sb.append("note: ").append(r.path("note").asText("")).append('\n');
         String text = r.path("text").asText("");
         if (!text.isBlank()) sb.append("---\n").append(text).append('\n');
+        JsonNode controls = r.path("controls");
+        if (controls.isArray() && controls.size() > 0) {
+            sb.append("--- interactive controls (target sel= with click/type):\n");
+            int n = 0;
+            for (JsonNode c : controls) {
+                if (n++ >= 25) break;
+                String tag = c.path("tag").asText(""), type = c.path("type").asText("");
+                String label = c.path("label").asText(""), sel = c.path("sel").asText("");
+                sb.append("  • ").append(tag);
+                if (!type.isBlank()) sb.append('/').append(type);
+                if (!label.isBlank()) sb.append("  \"").append(label).append('"');
+                if (!sel.isBlank()) sb.append("  sel=").append(sel);
+                sb.append('\n');
+            }
+        }
         JsonNode links = r.path("links");
         if (links.isArray() && links.size() > 0) {
-            sb.append("---\nLinks:\n");
+            sb.append("--- links:\n");
             int n = 0;
             for (JsonNode l : links) {
-                if (n++ >= 20) break;
+                if (n++ >= 15) break;
                 sb.append("  • ").append(l.path("t").asText("")).append("  →  ").append(l.path("h").asText("")).append('\n');
             }
         }

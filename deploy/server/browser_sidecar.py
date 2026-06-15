@@ -52,6 +52,37 @@ _SECRET_FIELD = re.compile(r"pass\s*word|passwd|\bpin\b|otp|2fa|card\s*number|ca
 _COMMIT_CLICK = re.compile(r"place\s+order|pay\s+now|pay\s+\$|confirm\s+(?:and\s+)?pay|"
                            r"confirm\s+order|complete\s+purchase|buy\s+now|submit\s+payment", re.I)
 
+# Cookie/consent dismissal — PRIVACY-PRESERVING: we click reject / necessary-only / close only.
+# We deliberately NEVER auto-"accept all" — that's a consent choice the user owns; if only an
+# accept-all exists we leave the banner and report it.
+_CONSENT_SELECTORS = ["#onetrust-reject-all-handler", "[data-testid=reject-all]",
+                      "button[aria-label*='reject' i]", "button[aria-label*='decline' i]"]
+_CONSENT_TEXTS = ["reject all", "reject non-essential", "necessary only", "only necessary",
+                  "essential only", "decline all", "decline", "continue without accepting", "reject"]
+
+
+async def _dismiss_consent(page) -> str:
+    """Best-effort, privacy-first dismissal of a cookie/consent overlay. Returns a note or ''."""
+    for sel in _CONSENT_SELECTORS:
+        try:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                await el.click(timeout=2000)
+                await page.wait_for_timeout(400)
+                return f"consent dismissed via {sel}"
+        except Exception:
+            pass
+    for txt in _CONSENT_TEXTS:
+        try:
+            loc = page.get_by_role("button", name=re.compile(txt, re.I))
+            if await loc.count() > 0 and await loc.first.is_visible():
+                await loc.first.click(timeout=2000)
+                await page.wait_for_timeout(400)
+                return f"consent dismissed via '{txt}'"
+        except Exception:
+            pass
+    return ""
+
 app = FastAPI()
 
 
@@ -155,6 +186,18 @@ async def _page_state(page: Page, include_links: bool = True) -> dict:
             "els => els.slice(0,40).map(e => ({t:(e.innerText||'').trim().slice(0,60), h:e.href}))"
             ".filter(l => l.t)")
         out["links"] = links
+        # Interactive controls — buttons / inputs / selects with a usable selector + label, so the
+        # agent can target a search box or button precisely instead of guessing. This is what makes
+        # clicking/typing on a JS SPA (e.g. Coles search) actually work.
+        controls = await page.eval_on_selector_all(
+            "button, input:not([type=hidden]), textarea, select, [role=button]",
+            "els => els.slice(0,30).map(e => {"
+            " const lbl=(e.innerText||e.value||e.placeholder||e.getAttribute('aria-label')||e.name||'').trim().slice(0,50);"
+            " let sel=''; if(e.id){sel='#'+(window.CSS&&CSS.escape?CSS.escape(e.id):e.id);}"
+            " else if(e.name){sel=e.tagName.toLowerCase()+'[name=\\\"'+e.name+'\\\"]';}"
+            " return {tag:e.tagName.toLowerCase(), type:e.type||'', label:lbl, sel};"
+            "}).filter(c => c.label || c.sel)")
+        out["controls"] = controls
     return out
 
 
@@ -177,7 +220,13 @@ async def act(req: ActReq):
                 return {"ok": False, "error": "goto requires url"}
             await page.goto(req.url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
             await page.wait_for_timeout(800)  # let late JS settle
-            return {"ok": True, "sessionId": req.sessionId, **await _page_state(page)}
+            consent = await _dismiss_consent(page)   # privacy-first cookie/consent dismissal
+            if consent:
+                await page.wait_for_timeout(500)
+            st = await _page_state(page)
+            if consent:
+                st["note"] = consent
+            return {"ok": True, "sessionId": req.sessionId, **st}
 
         if action in ("read", "state"):
             return {"ok": True, "sessionId": req.sessionId, **await _page_state(page)}
@@ -217,6 +266,23 @@ async def act(req: ActReq):
                 await page.press(req.selector, "Enter")
                 await page.wait_for_timeout(800)
             return {"ok": True, "sessionId": req.sessionId, **await _page_state(page)}
+
+        if action == "wait":
+            try:
+                if req.selector:
+                    await page.wait_for_selector(req.selector, timeout=NAV_TIMEOUT_MS)
+                else:
+                    await page.wait_for_timeout(1500)
+            except Exception as e:
+                return {"ok": False, "sessionId": req.sessionId,
+                        "error": f"wait: {type(e).__name__}: {e}", **await _page_state(page)}
+            return {"ok": True, "sessionId": req.sessionId, **await _page_state(page)}
+
+        if action == "dismiss":
+            note = await _dismiss_consent(page)
+            st = await _page_state(page)
+            st["note"] = note or "no privacy-preserving consent control found"
+            return {"ok": True, "sessionId": req.sessionId, **st}
 
         if action in ("back", "forward"):
             await (page.go_back() if action == "back" else page.go_forward())
