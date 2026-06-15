@@ -1,0 +1,16 @@
+[Unit]
+Description=Nizo health monitor — logs GPU/CPU temp, load, dmesg to diagnose hard drops
+After=multi-user.target
+
+[Service]
+Type=simple
+User=kislay
+Group=kislay
+Environment=NIZO_HEALTH_LOG=/mnt/ai-models/logs/health.log
+Environment=NIZO_HEALTH_INTERVAL=30
+ExecStart=/bin/bash /home/kislay/nizo_v1/deploy/server/nizo-health-monitor.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
