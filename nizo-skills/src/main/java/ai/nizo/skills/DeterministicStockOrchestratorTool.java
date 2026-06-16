@@ -58,6 +58,27 @@ public final class DeterministicStockOrchestratorTool implements Tool {
     /** Virtual-thread executor — sub-skills are I/O + LLM bound, perfect for virtual threads. */
     private static final ExecutorService DISPATCH = Executors.newVirtualThreadPerTaskExecutor();
 
+    /**
+     * Bounds how many sub-skills hit the single llama-server concurrently. The server exposes only
+     * {@code --parallel} slots (3 on Kimaya); fanning out all 5 analysts at once overflows them, so
+     * each context-switch evicts a sub-agent's KV cache and the next of its many calls must re-prefill
+     * the whole (tens-of-thousands-of-tokens) prompt. Measured June 2026: the news analyst took 315s
+     * for ~800 tokens of output — i.e. ~290s of pure re-prefill/queueing, not generation. Capping
+     * concurrency to fit inside the slots (with one to spare for the outer agent / prefetch) keeps each
+     * sub-agent's slot — and KV cache — warm across all its calls, so only the incremental tokens
+     * prefill. Default 2; tune via {@code NIZO_STOCK_ANALYST_CONCURRENCY}.
+     */
+    private static final java.util.concurrent.Semaphore ANALYST_GATE =
+            new java.util.concurrent.Semaphore(analystConcurrency());
+
+    private static int analystConcurrency() {
+        String v = System.getenv("NIZO_STOCK_ANALYST_CONCURRENCY");
+        if (v != null) {
+            try { return Math.max(1, Integer.parseInt(v.trim())); } catch (NumberFormatException ignore) { /* fall through */ }
+        }
+        return 2;
+    }
+
     /** Pre-compiled fence pattern for extracting chart-X JSON from sub-skill outputs. */
     private static final Pattern FENCE_PATTERN = Pattern.compile(
             "(?ms)```(chart-[a-z0-9-]+)\\n(.*?)\\n```");
@@ -302,7 +323,16 @@ public final class DeterministicStockOrchestratorTool implements Tool {
                         if (t == null) {
                             return Map.entry(name, ToolResult.error("sub-skill " + name + " not registered"));
                         }
-                        ToolResult r = invokeTool(t, input, sink);
+                        // Gate on the llama slot budget: at most ANALYST_CONCURRENCY sub-skills call the
+                        // model at once, so each keeps a warm KV slot across its calls instead of being
+                        // evicted and re-prefilled. acquireUninterruptibly: the supplier can't throw checked.
+                        ANALYST_GATE.acquireUninterruptibly();
+                        ToolResult r;
+                        try {
+                            r = invokeTool(t, input, sink);
+                        } finally {
+                            ANALYST_GATE.release();
+                        }
                         return Map.entry(name, r);
                     }), DISPATCH));
         }
