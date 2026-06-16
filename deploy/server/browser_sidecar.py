@@ -20,7 +20,9 @@ Security posture (defence in depth, NOT a hardened sandbox):
   * Sessions idle-evict after BROWSER_SESSION_TTL_S.
 
 Run:  uvicorn browser_sidecar:app --host 127.0.0.1 --port 7781
-Env:  BROWSER_HEADLESS=1 (default), BROWSER_SESSION_TTL_S=900, BROWSER_NAV_TIMEOUT_MS=30000
+Env:  BROWSER_HEADLESS=1 (default), BROWSER_SESSION_TTL_S=900,
+      BROWSER_NAV_TIMEOUT_MS=20000 (goto), BROWSER_ACT_TIMEOUT_MS=9000 (click/fill/scroll — fail
+      fast so the agent diverges), BROWSER_WAIT_TIMEOUT_MS=15000 (explicit wait-for-state)
 """
 import asyncio
 import hashlib
@@ -43,7 +45,14 @@ except Exception as e:  # pragma: no cover - import guard for clearer error on a
 
 HEADLESS = os.getenv("BROWSER_HEADLESS", "1") not in ("0", "false", "False")
 SESSION_TTL_S = int(os.getenv("BROWSER_SESSION_TTL_S", "900"))
-NAV_TIMEOUT_MS = int(os.getenv("BROWSER_NAV_TIMEOUT_MS", "30000"))
+NAV_TIMEOUT_MS = int(os.getenv("BROWSER_NAV_TIMEOUT_MS", "20000"))
+# Per-ACTION timeout (click/fill/scroll). Kept well under the nav timeout: if an element
+# never becomes actionable on a hostile SPA (overlay intercepting, lazy DOM), we must FAIL
+# FAST so the agent loop diverges to an alternate path instead of burning 30s per dead click.
+ACT_TIMEOUT_MS = int(os.getenv("BROWSER_ACT_TIMEOUT_MS", "9000"))
+# Explicit wait-for-state timeout (the agent asked us to wait for something) — bounded but
+# more generous than a plain action, since the agent is deliberately expecting a transition.
+WAIT_TIMEOUT_MS = int(os.getenv("BROWSER_WAIT_TIMEOUT_MS", "15000"))
 MAX_TEXT_CHARS = int(os.getenv("BROWSER_MAX_TEXT_CHARS", "12000"))
 
 # Field/selector patterns we refuse to TYPE into — entering secrets is the human's job.
@@ -371,7 +380,7 @@ async def act(req: ActReq):
                     await loc.first.scroll_into_view_if_needed(timeout=3000)
                 except Exception:
                     pass
-                await loc.first.click(timeout=NAV_TIMEOUT_MS)
+                await loc.first.click(timeout=ACT_TIMEOUT_MS)
                 st = await _observe(page, s)
                 after = await _fingerprint(page)
                 st["changed"] = before != after
@@ -387,9 +396,9 @@ async def act(req: ActReq):
                         "error": f"refusing to click a commit-purchase control ({label!r}); "
                                  f"the human must complete checkout / payment"}
             if req.text and not req.selector:
-                await page.get_by_text(req.text, exact=False).first.click(timeout=NAV_TIMEOUT_MS)
+                await page.get_by_text(req.text, exact=False).first.click(timeout=ACT_TIMEOUT_MS)
             else:
-                await page.click(req.selector, timeout=NAV_TIMEOUT_MS)
+                await page.click(req.selector, timeout=ACT_TIMEOUT_MS)
             await page.wait_for_timeout(800)
             return {"ok": True, "sessionId": req.sessionId, **await _page_state(page)}
 
@@ -434,7 +443,7 @@ async def act(req: ActReq):
                     or str(attrs.get("ac", "")).lower().startswith("cc-"):
                 return {"ok": False, "needs_human": True,
                         "error": "refusing to type into a password/payment field; the human enters secrets"}
-            await page.fill(req.selector, req.text or "", timeout=NAV_TIMEOUT_MS)
+            await page.fill(req.selector, req.text or "", timeout=ACT_TIMEOUT_MS)
             if req.submit:
                 await page.press(req.selector, "Enter")
                 await page.wait_for_timeout(800)
@@ -444,7 +453,7 @@ async def act(req: ActReq):
             try:
                 if req.selector:
                     state = req.state if req.state in ("visible", "hidden", "attached", "detached") else "visible"
-                    await page.wait_for_selector(req.selector, state=state, timeout=NAV_TIMEOUT_MS)
+                    await page.wait_for_selector(req.selector, state=state, timeout=WAIT_TIMEOUT_MS)
                 else:
                     await page.wait_for_timeout(1500)
             except Exception as e:
@@ -471,7 +480,7 @@ async def act(req: ActReq):
         if action == "scroll":
             try:
                 if req.selector:
-                    await page.locator(req.selector).first.scroll_into_view_if_needed(timeout=NAV_TIMEOUT_MS)
+                    await page.locator(req.selector).first.scroll_into_view_if_needed(timeout=ACT_TIMEOUT_MS)
                 else:
                     await page.mouse.wheel(0, 1200)   # scroll a viewport to load lazy/virtualized lists
                 await page.wait_for_timeout(700)
