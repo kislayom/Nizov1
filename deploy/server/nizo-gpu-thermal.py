@@ -4,20 +4,24 @@ speed needed, and nothing else. GPU fan only; the power limit is never touched.
 
 Why
 ---
-Under sustained load the RTX PRO 5000's BIOS fan curve dawdles (30->50 %) and lets the core
-ride to ~79 C, where it thermal-throttles clocks. The fix isn't a power cap (that costs
-throughput for a problem that's really about airflow) — it's just running the GPU fan a bit
-harder. This daemon is a closed loop on core temperature: it nudges ONLY the GPU fan up when
-the core climbs toward the target and eases it back down when there's headroom, settling on
-the quietest fan speed that keeps the core under the ceiling. It does not manage power, does
-not touch any chassis/CPU fan (NVML only exposes the GPU's own fan), and restores the BIOS
-auto curve on exit.
+This governs the GPU's TEMPERATURE. It does NOT (and must not) replace the 250W power cap —
+those solve two different problems and BOTH are kept:
+  * Power cap (nizo-gpucap, 250W): prevents the box dropping off the network under sustained
+    load. That drop is power/electrical (PSU headroom) — it reproduced at 300W even while this
+    governor kept the GPU cool, so a fan can't fix it.
+  * This fan governor: prevents thermal CLOCK throttling. Within the 250W envelope the lazy
+    BIOS fan curve (30->50%) still lets the core ride to ~79C and throttle clocks
+    (2512->2317 MHz); we hold it lower with the minimum fan instead.
+Closed loop on core temperature: nudge ONLY the GPU fan up as the core climbs toward the
+target, ease it down when there's headroom, settle on the quietest speed under the ceiling.
+Never touches the power limit, never touches any chassis/CPU fan (NVML exposes only the GPU's
+own fan), restores the BIOS auto curve on exit.
 
 Method (same as nizo-mon.py): NVML `nvmlDeviceSetFanSpeed_v2` — no Coolbits / Xvfb /
 nvidia-settings. Must run as root.
 
 Env:
-  NIZO_GPU_TARGET_C   setpoint to hold the core near, default 72 (gives margin under ~75)
+  NIZO_GPU_TARGET_C   setpoint to hold the core near, default 71 (gives margin under ~75)
   NIZO_GPU_FAN_FLOOR  lowest fan % the loop will command, default 35
   NIZO_GPU_POLL_SEC   poll interval seconds, default 2
 """
