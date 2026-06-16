@@ -208,6 +208,10 @@ public final class Bootstrap implements AutoCloseable {
         // pipeline's fan-out to any task; needs the registry to dispatch its inner tools.
         builder.add(measure.apply(new ai.nizo.skills.DeepAgentTool(
                 llmClient, registryRef::get, llmConfig.model(), 8)));
+        // Web-task agent: drives the browser through a deterministic observe→act→verify loop to
+        // complete general multi-step web tasks (search, forms, cart, bookings). Closed action space.
+        builder.add(measure.apply(new ai.nizo.skills.WebTaskSubAgent(
+                llmClient, registryRef::get, llmConfig.model(), 24)));
         // Sub-agents get their own iteration cap, separate from the orchestrator's. 20 gives
         // enough headroom for analysts to fight through bot-blocks (DataDome, 404s, retries via
         // SmartProxy) before being asked to write — 12 was sometimes hit mid-research.
