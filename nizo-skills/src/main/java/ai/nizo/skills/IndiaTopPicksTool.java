@@ -71,7 +71,7 @@ public final class IndiaTopPicksTool implements Tool {
                 "topN":         { "type": "integer", "description": "How many final picks to return (default 10)." },
                 "candidateN":   { "type": "integer", "description": "How many top-by-market-cap candidates to deep-score. Default 60." },
                 "weights":      { "type": "object", "description": "Factor weights — keys: quality, value, growth, momentum, buffett. Defaults: 0.35/0.20/0.20/0.15/0.10." },
-                "concurrency":  { "type": "integer", "description": "Parallel scorers passed to india_screener (default 6)." }
+                "concurrency":  { "type": "integer", "description": "Parallel scorers passed to india_screener (default 3, matching the llama-server slot count — higher just thrashes KV cache)." }
               }
             }
             """;
@@ -85,7 +85,7 @@ public final class IndiaTopPicksTool implements Tool {
             String universe   = args.path("universe").asText("NIFTY 500").trim();
             int topN          = Math.max(1, Math.min(50,  args.path("topN").asInt(10)));
             int candidateN    = Math.max(topN, Math.min(200, args.path("candidateN").asInt(60)));
-            int concurrency   = Math.max(1, Math.min(10, args.path("concurrency").asInt(6)));
+            int concurrency   = Math.max(1, Math.min(10, args.path("concurrency").asInt(3)));
             JsonNode weights  = args.path("weights");
 
             ToolRegistry reg = registry.get();

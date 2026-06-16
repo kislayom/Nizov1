@@ -107,8 +107,13 @@ public final class IndiaPicksDailyScheduler {
             Tool picksT = reg.byName("india_top_picks").orElse(null);
             if (picksT == null) { LOG.warn("india-picks daily: tool not registered, skipping"); return; }
 
+            // concurrency=3 matches the llama-server's --parallel slot count. Was 6: that fanned out
+            // 6 LLM-bound scorers against 3 slots, so the daily run thrashed each scorer's KV cache
+            // (measured June 2026: a NIFTY-500 pass took ~19 min) AND starved any interactive stock
+            // report that overlapped it. Capping to the real slot budget roughly halves the run and
+            // leaves the interactive analyst gate room to make progress when the two collide.
             String args = "{\"universe\":\"" + UNIVERSE + "\",\"topN\":" + TOP_N
-                        + ",\"candidateN\":" + CANDIDATE_N + ",\"concurrency\":6}";
+                        + ",\"candidateN\":" + CANDIDATE_N + ",\"concurrency\":3}";
             LOG.info("india-picks daily: starting scheduled run (universe={}, topN={}, candidateN={})",
                     UNIVERSE, TOP_N, CANDIDATE_N);
             long t0 = System.currentTimeMillis();
