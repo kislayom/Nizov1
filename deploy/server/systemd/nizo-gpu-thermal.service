@@ -1,0 +1,18 @@
+[Unit]
+Description=Nizo GPU fan governor (minimum GPU fan to hold core <75C; power limit untouched)
+# Replaces the static nizo-gpucap power cap: heat (lazy BIOS fan -> ~79C + clock throttle),
+# not power, was the real sustained-load limit, and the box is network-stable at full 300W.
+After=multi-user.target
+
+[Service]
+Type=simple
+# Runs as root: NVML fan writes require it. Uses the hf venv (has nvidia-ml-py/pynvml).
+ExecStart=/home/kislay/venvs/hf/bin/python /home/kislay/nizo_v1/deploy/server/nizo-gpu-thermal.py
+Environment=NIZO_GPU_TARGET_C=71
+Restart=always
+RestartSec=5
+# On stop, the daemon's signal handler restores the BIOS auto fan curve.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
