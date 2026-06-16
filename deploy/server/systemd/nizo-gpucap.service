@@ -1,0 +1,17 @@
+[Unit]
+Description=Nizo GPU power cap — bounds heat under sustained inference (reliability fix for the load-drops)
+After=multi-user.target
+Before=nizo-llama.service
+Wants=nizo-llama.service
+
+[Service]
+# Cap the RTX PRO 5000 from 300W to 250W at boot. The health monitor showed the box pegging 300W/99%
+# under load right before its repeated full-network drops; 250W cut peak GPU temp to ~43C in testing
+# with a small throughput hit. Reapplied every boot (nvidia-smi -pl does not persist across reboot),
+# before the LLM server starts. Tune via NIZO_GPU_WATTS or edit the value.
+Type=oneshot
+ExecStart=/usr/bin/nvidia-smi -pl 250
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
