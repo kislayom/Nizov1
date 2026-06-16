@@ -59,15 +59,19 @@ public final class BrowserTool implements Tool {
 
     @Override
     public String description() {
-        return "Drive a real headless web browser for JS-heavy sites and multi-step web tasks that "
-                + "web_fetch cannot do — it renders JavaScript, clicks, fills forms, and reads dynamic "
-                + "content, keeping a session across calls. On goto it privacy-first dismisses cookie/"
-                + "consent banners and returns the page's INTERACTIVE CONTROLS (buttons/inputs with "
-                + "selectors) so you can target a search box or button precisely. Use it for app-like "
-                + "sites (e.g. building a grocery cart), pages needing rendering, or login-gated flows. "
-                + "It will NOT type passwords or payment details, and will NOT place an order / pay — it "
-                + "surfaces those for the human. Actions: goto {url}; read; click {selector|text}; "
-                + "type {selector,text,submit?}; wait {selector?}; dismiss; back; close.";
+        return "Drive a real headless web browser to complete multi-step tasks on any site (search, "
+                + "pick a result, fill forms, build a cart) — what web_fetch can't. WORKFLOW: call "
+                + "`observe` to get a numbered list of interactive elements ([index] role \"name\" state) "
+                + "plus a snapshotVersion, then act BY INDEX: click {index}, type {index,text,submit?}. "
+                + "Always pass the snapshotVersion you observed; if the page changed you'll get a "
+                + "'stale, re-observe' error — call observe again. Each action reports changed/change_kind "
+                + "so you know whether it did something. For lazy lists use `scroll`; to wait out a spinner "
+                + "use wait {selector,state:hidden}; if the DOM is unreadable use `screenshot_marks` then "
+                + "image_analyze the PNG (the box numbers match the indices). goto privacy-dismisses "
+                + "cookie banners. It will NOT type passwords/payment or click place-order/pay — those "
+                + "stay with the human. Actions: observe; goto {url}; click {index|selector|text}; "
+                + "type {index|selector,text,submit?,sequential?}; scroll {selector?}; wait {selector,state?}; "
+                + "screenshot; screenshot_marks; dismiss; read; back; close.";
     }
 
     @Override
@@ -76,12 +80,16 @@ public final class BrowserTool implements Tool {
             {
               "type": "object",
               "properties": {
-                "action":   { "type": "string", "enum": ["goto","read","click","type","wait","dismiss","screenshot","back","close"],
-                              "description": "What to do. 'wait' waits for {selector} (or ~1.5s); 'dismiss' re-attempts consent; 'screenshot' saves a PNG to the workspace to view with image_analyze." },
+                "action":   { "type": "string", "enum": ["observe","goto","read","click","type","scroll","wait","dismiss","screenshot","screenshot_marks","back","close"],
+                              "description": "observe = numbered interactive elements + snapshotVersion (call before acting); then click/type BY INDEX. 'wait' {selector,state}; 'scroll' loads lazy lists; 'screenshot_marks' = numbered overlay for image_analyze." },
                 "url":      { "type": "string", "description": "For goto: the URL to open." },
-                "selector": { "type": "string", "description": "CSS selector for click/type (preferred)." },
-                "text":     { "type": "string", "description": "For click: visible link/button text. For type: the text to enter." },
-                "submit":   { "type": "boolean", "description": "For type: press Enter after filling (default false)." }
+                "index":    { "type": "integer", "description": "Target element index from the latest observe (preferred over selector)." },
+                "snapshotVersion": { "type": "integer", "description": "The snapshotVersion observe returned — pass it with click/type so a re-render fails safe." },
+                "selector": { "type": "string", "description": "CSS selector (fallback for click/type; for wait/scroll the element to wait-for/scroll-to)." },
+                "text":     { "type": "string", "description": "For click(by text): visible label. For type: the text to enter." },
+                "submit":   { "type": "boolean", "description": "For type: press Enter after filling (default false)." },
+                "sequential": { "type": "boolean", "description": "For type: per-key typing (use for autocomplete/typeahead fields)." },
+                "state":    { "type": "string", "enum": ["visible","hidden","attached","detached"], "description": "For wait: element state to wait for (default visible)." }
               },
               "required": ["action"]
             }
@@ -110,10 +118,13 @@ public final class BrowserTool implements Tool {
         var payload = new java.util.HashMap<String, Object>();
         payload.put("action", action);
         if (sessionId != null) payload.put("sessionId", sessionId);
-        for (String f : new String[]{"url", "selector", "text"}) {
+        for (String f : new String[]{"url", "selector", "text", "state"}) {
             if (a.hasNonNull(f)) payload.put(f, a.get(f).asText());
         }
+        if (a.path("index").isNumber()) payload.put("index", a.path("index").asInt());
+        if (a.path("snapshotVersion").isNumber()) payload.put("snapshotVersion", a.path("snapshotVersion").asInt());
         if (a.path("submit").asBoolean(false)) payload.put("submit", true);
+        if (a.path("sequential").asBoolean(false)) payload.put("sequential", true);
 
         JsonNode resp;
         try {
@@ -161,6 +172,23 @@ public final class BrowserTool implements Tool {
             String shot = r.path("screenshot").asText();
             sb.append("screenshot saved: ").append(shot)
               .append("  (view it with image_analyze path=\"").append(shot).append("\")\n");
+        }
+        if (r.has("changed")) {
+            sb.append("changed: ").append(r.path("changed").asBoolean())
+              .append(" (").append(r.path("change_kind").asText("?")).append(")\n");
+        }
+        JsonNode elements = r.path("elements");
+        if (elements.isArray() && elements.size() > 0) {
+            sb.append("snapshotVersion=").append(r.path("snapshotVersion").asInt())
+              .append("  — act by [index] and pass this snapshotVersion:\n");
+            int n = 0;
+            for (JsonNode e : elements) {
+                if (n++ >= 80) break;
+                sb.append("  [").append(e.path("index").asInt()).append("] ").append(e.path("role").asText(""));
+                String nm = e.path("name").asText("");  if (!nm.isBlank()) sb.append(" \"").append(nm).append('"');
+                String stt = e.path("state").asText(""); if (!stt.isBlank()) sb.append("  ").append(stt);
+                sb.append('\n');
+            }
         }
         String text = r.path("text").asText("");
         if (!text.isBlank()) sb.append("---\n").append(text).append('\n');

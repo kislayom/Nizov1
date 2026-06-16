@@ -23,6 +23,7 @@ Run:  uvicorn browser_sidecar:app --host 127.0.0.1 --port 7781
 Env:  BROWSER_HEADLESS=1 (default), BROWSER_SESSION_TTL_S=900, BROWSER_NAV_TIMEOUT_MS=30000
 """
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -83,6 +84,116 @@ async def _dismiss_consent(page) -> str:
             pass
     return ""
 
+# ── Indexed perception (the SOTA web-agent pattern) ──────────────────────────────────────────
+# observe() stamps every VISIBLE interactive element with data-nizo-idx + data-nizo-ver and returns
+# a compact serialization [index, role, name, state]. Index actions resolve via the unique stamped
+# selector and validate the snapshot version, so a re-render fails safe ("re-observe") instead of
+# clicking whatever now occupies that index — the #1 correctness bug in selector-only automation.
+_OBSERVE_JS = r"""
+(ver) => {
+  const SEL = 'button, a[href], input:not([type=hidden]), textarea, select,'
+    + '[role=button],[role=link],[role=menuitem],[role=menuitemcheckbox],[role=checkbox],'
+    + '[role=radio],[role=tab],[role=combobox],[role=option],[role=switch],[contenteditable]';
+  document.querySelectorAll('[data-nizo-idx]').forEach(e => {
+    e.removeAttribute('data-nizo-idx'); e.removeAttribute('data-nizo-ver');
+  });
+  const out = []; let i = 0; const seen = new Set();
+  for (const el of document.querySelectorAll(SEL)) {
+    if (seen.has(el)) continue; seen.add(el);
+    const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+    if (r.width <= 1 || r.height <= 1) continue;
+    if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue;
+    if (el.closest('[aria-hidden=true]')) continue;
+    el.setAttribute('data-nizo-idx', String(i));
+    el.setAttribute('data-nizo-ver', String(ver));
+    const role = el.getAttribute('role') || el.tagName.toLowerCase();
+    const name = (el.getAttribute('aria-label') || el.innerText || el.value
+                  || el.placeholder || el.getAttribute('title') || el.name || '')
+                 .trim().replace(/\s+/g, ' ').slice(0, 80);
+    const st = [];
+    if (el.disabled) st.push('disabled');
+    if (el.required) st.push('required');
+    if (el.checked) st.push('checked');
+    const ex = el.getAttribute('aria-expanded'); if (ex) st.push('expanded=' + ex);
+    if (el.type) st.push(el.type);
+    out.push({ index: i, role: role, name: name, state: st.join(' ') });
+    i++; if (i >= 120) break;
+  }
+  return out;
+}
+"""
+
+
+# Overlay numbered boxes on the stamped interactive elements (Set-of-Marks). Numbers == observe indices.
+_MARKS_JS = r"""
+() => {
+  document.querySelectorAll('.nizo-mark').forEach(e => e.remove());
+  document.querySelectorAll('[data-nizo-idx]').forEach(el => {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 1 || r.height <= 1) return;
+    const m = document.createElement('div');
+    m.className = 'nizo-mark';
+    m.textContent = el.getAttribute('data-nizo-idx');
+    m.style.cssText = 'position:fixed;z-index:2147483647;background:#000;color:#0f0;'
+      + 'font:bold 11px monospace;padding:0 2px;border:1px solid #0f0;pointer-events:none;'
+      + 'left:' + Math.max(0, r.left) + 'px;top:' + Math.max(0, r.top) + 'px;';
+    document.body.appendChild(m);
+  });
+}
+"""
+
+
+async def _settle(page):
+    """Let the page quiesce after an action (NOT networkidle — SPAs hold sockets open)."""
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=4000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(500)
+
+
+async def _fingerprint(page):
+    try:
+        txt = await page.inner_text("body", timeout=1500)
+    except Exception:
+        txt = ""
+    return (page.url, hashlib.sha1(txt.encode("utf-8", "ignore")).hexdigest(), len(txt))
+
+
+def _change_kind(before, after) -> str:
+    if before[0] != after[0]:
+        return "navigated"
+    if before[1] != after[1] or before[2] != after[2]:
+        return "dom-updated"
+    return "none"
+
+
+async def _observe(page, session) -> dict:
+    await _settle(page)
+    session.snapshot_version += 1
+    ver = session.snapshot_version
+    try:
+        elements = await page.evaluate(_OBSERVE_JS, ver)
+    except Exception:
+        elements = []
+    try:
+        text = await page.inner_text("body", timeout=2000)
+    except Exception:
+        text = ""
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return {"snapshotVersion": ver, "elements": elements, "url": page.url,
+            "title": await page.title(), "text": text[:MAX_TEXT_CHARS]}
+
+
+def _stale(req, session):
+    """If the model acted against an old snapshot, refuse (returns an error dict) — else None."""
+    if req.snapshotVersion is not None and req.snapshotVersion != session.snapshot_version:
+        return {"ok": False, "sessionId": req.sessionId,
+                "error": f"stale snapshot v{req.snapshotVersion} (current v{session.snapshot_version}) "
+                         f"— call observe again before acting"}
+    return None
+
+
 app = FastAPI()
 
 
@@ -98,6 +209,7 @@ class Session:
         self.ctx = ctx
         self.page = page
         self.last_used = time.time()
+        self.snapshot_version = 0   # bumped on every observe(); index actions validate against it
 
 
 class _State:
@@ -155,6 +267,10 @@ class ActReq(BaseModel):
     selector: Optional[str] = None
     text: Optional[str] = None
     submit: Optional[bool] = False
+    index: Optional[int] = None            # index-based targeting (from observe)
+    snapshotVersion: Optional[int] = None  # version the model acted against (stale-ref guard)
+    sequential: Optional[bool] = False     # type per-key (pressSequentially) for typeahead fields
+    state: Optional[str] = None            # wait: visible|hidden|attached|detached
 
 
 @app.get("/health")
@@ -231,10 +347,39 @@ async def act(req: ActReq):
         if action in ("read", "state"):
             return {"ok": True, "sessionId": req.sessionId, **await _page_state(page)}
 
+        if action == "observe":
+            return {"ok": True, "sessionId": req.sessionId, **await _observe(page, s)}
+
         if action == "click":
+            if req.index is not None:
+                stale = _stale(req, s)
+                if stale:
+                    return stale
+                loc = page.locator(f'[data-nizo-idx="{req.index}"]')
+                if await loc.count() == 0:
+                    return {"ok": False, "sessionId": req.sessionId, "stale": True,
+                            "error": f"index {req.index} no longer present (page changed) — call observe again"}
+                try:
+                    label = (await loc.first.inner_text(timeout=1000)) or ""
+                except Exception:
+                    label = ""
+                if _COMMIT_CLICK.search(label):
+                    return {"ok": False, "needs_human": True,
+                            "error": f"refusing to click a commit-purchase control ({label!r}); the human completes checkout"}
+                before = await _fingerprint(page)
+                try:
+                    await loc.first.scroll_into_view_if_needed(timeout=3000)
+                except Exception:
+                    pass
+                await loc.first.click(timeout=NAV_TIMEOUT_MS)
+                st = await _observe(page, s)
+                after = await _fingerprint(page)
+                st["changed"] = before != after
+                st["change_kind"] = _change_kind(before, after)
+                return {"ok": True, "sessionId": req.sessionId, **st}
             target = req.selector or req.text
             if not target:
-                return {"ok": False, "error": "click requires selector or text"}
+                return {"ok": False, "error": "click requires index, selector, or text"}
             # Refuse to commit a purchase — that stays with the human.
             label = req.text or target
             if _COMMIT_CLICK.search(label):
@@ -249,8 +394,36 @@ async def act(req: ActReq):
             return {"ok": True, "sessionId": req.sessionId, **await _page_state(page)}
 
         if action == "type":
+            if req.index is not None:
+                stale = _stale(req, s)
+                if stale:
+                    return stale
+                loc = page.locator(f'[data-nizo-idx="{req.index}"]')
+                if await loc.count() == 0:
+                    return {"ok": False, "sessionId": req.sessionId, "stale": True,
+                            "error": f"index {req.index} no longer present — call observe again"}
+                attrs = await loc.first.evaluate(
+                    "e => ({type:e.type||'', name:e.name||'', id:e.id||'', ac:e.autocomplete||''})")
+                blob = " ".join(str(attrs.get(k, "")) for k in ("type", "name", "id", "ac"))
+                if str(attrs.get("type", "")).lower() == "password" or _SECRET_FIELD.search(blob) \
+                        or str(attrs.get("ac", "")).lower().startswith("cc-"):
+                    return {"ok": False, "needs_human": True,
+                            "error": "refusing to type into a password/payment field; the human enters secrets"}
+                before = await _fingerprint(page)
+                if req.sequential:
+                    await loc.first.click()
+                    await loc.first.press_sequentially(req.text or "", delay=30)   # fires typeahead keyup handlers
+                else:
+                    await loc.first.fill(req.text or "")
+                if req.submit:
+                    await loc.first.press("Enter")
+                st = await _observe(page, s)
+                after = await _fingerprint(page)
+                st["changed"] = before != after
+                st["change_kind"] = _change_kind(before, after)
+                return {"ok": True, "sessionId": req.sessionId, **st}
             if not req.selector:
-                return {"ok": False, "error": "type requires selector"}
+                return {"ok": False, "error": "type requires index or selector"}
             # Refuse secret/payment fields. Inspect the element's attributes.
             attrs = await page.eval_on_selector(
                 req.selector,
@@ -270,7 +443,8 @@ async def act(req: ActReq):
         if action == "wait":
             try:
                 if req.selector:
-                    await page.wait_for_selector(req.selector, timeout=NAV_TIMEOUT_MS)
+                    state = req.state if req.state in ("visible", "hidden", "attached", "detached") else "visible"
+                    await page.wait_for_selector(req.selector, state=state, timeout=NAV_TIMEOUT_MS)
                 else:
                     await page.wait_for_timeout(1500)
             except Exception as e:
@@ -293,6 +467,31 @@ async def act(req: ActReq):
             await page.screenshot(path=os.path.join(shot_dir, name), full_page=False)
             return {"ok": True, "sessionId": req.sessionId, "url": page.url,
                     "title": await page.title(), "screenshot": name}
+
+        if action == "scroll":
+            try:
+                if req.selector:
+                    await page.locator(req.selector).first.scroll_into_view_if_needed(timeout=NAV_TIMEOUT_MS)
+                else:
+                    await page.mouse.wheel(0, 1200)   # scroll a viewport to load lazy/virtualized lists
+                await page.wait_for_timeout(700)
+            except Exception as e:
+                return {"ok": False, "sessionId": req.sessionId, "error": f"scroll: {type(e).__name__}: {e}"}
+            return {"ok": True, "sessionId": req.sessionId, **await _observe(page, s)}
+
+        if action == "screenshot_marks":
+            # Set-of-Marks: overlay numbered boxes matching the latest observe() indices, then
+            # screenshot for the vision model. The numbers ARE the observe indices, so the model
+            # still answers by index — never raw coordinates.
+            ver = s.snapshot_version
+            await page.evaluate(_MARKS_JS)
+            shot_dir = os.getenv("BROWSER_SHOT_DIR", "/tmp")
+            os.makedirs(shot_dir, exist_ok=True)
+            name = "marks-" + uuid.uuid4().hex[:8] + ".png"
+            await page.screenshot(path=os.path.join(shot_dir, name), full_page=False)
+            await page.evaluate("() => document.querySelectorAll('.nizo-mark').forEach(e => e.remove())")
+            return {"ok": True, "sessionId": req.sessionId, "screenshot": name,
+                    "snapshotVersion": ver, "url": page.url, "title": await page.title()}
 
         if action in ("back", "forward"):
             await (page.go_back() if action == "back" else page.go_forward())

@@ -95,6 +95,31 @@ class BrowserToolTest {
     }
 
     @Test
+    void observeRendersIndexedElements() {
+        response = "{\"ok\":true,\"sessionId\":\"s1\",\"snapshotVersion\":2,\"url\":\"https://x.com\",\"title\":\"X\","
+                + "\"elements\":[{\"index\":0,\"role\":\"textbox\",\"name\":\"Search\",\"state\":\"required\"},"
+                + "{\"index\":1,\"role\":\"button\",\"name\":\"Go\",\"state\":\"\"}]}";
+        BrowserTool t = new BrowserTool(baseUrl);
+        ToolResult r = t.execute("{\"action\":\"observe\"}");
+        assertTrue(r.ok(), r.content());
+        assertTrue(r.content().contains("snapshotVersion=2"), r.content());
+        assertTrue(r.content().contains("[0] textbox \"Search\""), r.content());
+        assertTrue(r.content().contains("[1] button \"Go\""), r.content());
+    }
+
+    @Test
+    void clickByIndexForwardsIndexVersionAndShowsChange() {
+        response = "{\"ok\":true,\"sessionId\":\"s1\",\"changed\":true,\"change_kind\":\"navigated\","
+                + "\"url\":\"https://x.com/2\",\"title\":\"2\",\"elements\":[]}";
+        BrowserTool t = new BrowserTool(baseUrl);
+        ToolResult r = t.execute("{\"action\":\"click\",\"index\":5,\"snapshotVersion\":3}");
+        assertTrue(r.ok(), r.content());
+        assertTrue(lastBody.get().contains("\"index\":5"), lastBody.get());
+        assertTrue(lastBody.get().contains("\"snapshotVersion\":3"), lastBody.get());
+        assertTrue(r.content().contains("changed: true (navigated)"), r.content());
+    }
+
+    @Test
     void missingActionRejected() {
         BrowserTool t = new BrowserTool(baseUrl);
         ToolResult r = t.execute("{}");
