@@ -171,6 +171,21 @@ public final class WebChannel implements AutoCloseable {
         if (auth != null && WebAuth.isLoopback(ex)) {
             ex.getResponseHeaders().add("Set-Cookie", WebAuth.setCookieValue(auth.token()));
         }
+        // Dev override: if NIZO_WEB_DIR points at a directory with index.html, serve from disk so
+        // UI changes hot-reload on a browser refresh (no jar rebuild). Falls back to the bundled
+        // classpath resource for production. Path-guarded to the configured dir.
+        String webDir = System.getenv("NIZO_WEB_DIR");
+        if (webDir != null && !webDir.isBlank()) {
+            Path idx = Path.of(webDir).resolve("index.html").toAbsolutePath().normalize();
+            if (idx.startsWith(Path.of(webDir).toAbsolutePath().normalize()) && Files.isRegularFile(idx)) {
+                byte[] body = Files.readAllBytes(idx);
+                ex.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+                ex.getResponseHeaders().add("Cache-Control", "no-store");
+                ex.sendResponseHeaders(200, body.length);
+                try (OutputStream os = ex.getResponseBody()) { os.write(body); }
+                return;
+            }
+        }
         try (InputStream is = WebChannel.class.getResourceAsStream("/web/index.html")) {
             if (is == null) { respondText(ex, 500, "index.html not bundled"); return; }
             byte[] body = is.readAllBytes();
@@ -1910,6 +1925,10 @@ public final class WebChannel implements AutoCloseable {
                                                           "promptTokens", f.promptTokens(), "completionTokens", f.completionTokens(),
                                                           "stopReason", f.stopReason() == null ? "" : f.stopReason());
             case AgentEvent.Warning w          -> Map.of("iteration", w.iteration(), "message", w.message() == null ? "" : w.message());
+            case AgentEvent.ReminderFired r    -> Map.of("iteration", r.iteration(),
+                                                          "taskId", r.taskId() == null ? "" : r.taskId(),
+                                                          "chatId", r.chatId() == null ? "" : r.chatId(),
+                                                          "prompt", r.prompt() == null ? "" : r.prompt());
         };
     }
 
