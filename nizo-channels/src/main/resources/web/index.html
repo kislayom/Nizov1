@@ -4,42 +4,86 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Nizo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500&display=swap" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..600,0..1,0&display=swap" />
 <style>
   :root {
     color-scheme: dark;
 
-    /* ── Surface scale — HF-inspired neutral black with hairline elevations ──
-     * Goal: darker page canvas so cards "float" with minimal borders.
-     * Reference: huggingface.co billing — pure-black bg, near-black cards, hairline rules.
-     */
-    --bg:         #0a0a0a;
-    --surface:    #111111;
-    --surface-2:  #161616;
-    --surface-3:  #1f1f1f;
-    --hover:      rgba(255,255,255,.04);
+    /* ════════════════════════════════════════════════════════════════════════
+     * Material 3 (m3.material.io) — dark baseline scheme.
+     * --md-sys-* are the canonical M3 roles; the short aliases map the app's
+     * existing variable names onto them so every component picks up the M3 palette
+     * without a per-rule rewrite. The M3 component layer near the end of this
+     * <style> uses the --md-* roles directly.
+     * ════════════════════════════════════════════════════════════════════════ */
 
-    /* ── Borders — hairlines, lighter on hover ── */
-    --border:        rgba(255,255,255,.07);
-    --border-strong: rgba(255,255,255,.11);
+    /* ── M3 color roles (dark) ── */
+    --md-primary:                 #d0bcff;
+    --md-on-primary:              #381e72;
+    --md-primary-container:       #4f378b;
+    --md-on-primary-container:    #eaddff;
+    --md-secondary:               #ccc2dc;
+    --md-on-secondary:            #332d41;
+    --md-secondary-container:     #4a4458;
+    --md-on-secondary-container:  #e8def8;
+    --md-tertiary:                #efb8c8;
+    --md-on-tertiary:             #492532;
+    --md-tertiary-container:      #633b48;
+    --md-on-tertiary-container:   #ffd8e4;
+    --md-error:                   #f2b8b5;
+    --md-on-error:                #601410;
+    --md-error-container:         #8c1d18;
+    --md-on-error-container:      #f9dedc;
 
-    /* ── Typography — 4 levels of weight ── */
-    --text:    #ededed;
-    --text-2:  #c0c0c0;
-    --text-3:  #6c6c6c;
-    --text-4:  #4a4a4a;
+    --md-surface:                 #141218;
+    --md-surface-dim:             #141218;
+    --md-surface-bright:          #3b383e;
+    --md-surface-container-lowest:#0f0d13;
+    --md-surface-container-low:   #1d1b20;
+    --md-surface-container:       #211f26;
+    --md-surface-container-high:  #2b2930;
+    --md-surface-container-highest:#36343b;
+    --md-on-surface:              #e6e0e9;
+    --md-on-surface-variant:      #cac4d0;
+    --md-outline:                 #938f99;
+    --md-outline-variant:         #49454f;
+    --md-inverse-surface:         #e6e0e9;
+    --md-inverse-on-surface:      #322f35;
+    --md-inverse-primary:         #6750a4;
 
-    /* ── Accent — calm desaturated blue ── */
-    --accent:        #7c9cff;
-    --accent-soft:   rgba(124,156,255,.14);
-    --accent-softer: rgba(124,156,255,.08);
-    --accent-strong: #9cb4ff;
+    /* state-layer opacities (M3): hover .08, focus/press .12 */
+    --md-state-hover: 0.08;
+    --md-state-press: 0.12;
 
-    /* ── Semantic — HF emerald / amber / red, reserved for genuine state signal ── */
-    --ok:   #22c55e;        /* HF emerald — used for STRONG_BUY / beat-streak / progress fills */
-    --ok-2: #4ade80;        /* lighter green for trend arrows / hover states */
-    --warn: #facc15;
-    --bad:  #ef4444;
-    --bad-2: #f87171;
+    /* ── App aliases mapped to M3 roles ── */
+    --bg:         var(--md-surface);
+    --surface:    var(--md-surface-container-low);
+    --surface-2:  var(--md-surface-container);
+    --surface-3:  var(--md-surface-container-high);
+    --hover:      rgba(230,224,233,.08);
+
+    --border:        var(--md-outline-variant);
+    --border-strong: var(--md-outline);
+
+    --text:    var(--md-on-surface);
+    --text-2:  var(--md-on-surface-variant);
+    --text-3:  var(--md-outline);
+    --text-4:  #5f5b66;
+
+    --accent:        var(--md-primary);
+    --accent-soft:   rgba(208,188,255,.16);
+    --accent-softer: rgba(208,188,255,.08);
+    --accent-strong: var(--md-on-primary-container);
+
+    /* ── Semantic (M3 error for bad; tasteful green/amber for stock signal) ── */
+    --ok:   #6dd58c;
+    --ok-2: #8fe3aa;
+    --warn: #f5d67b;
+    --bad:  var(--md-error);
+    --bad-2: #f2b8b5;
 
     /* ── Spacing scale ── */
     --space-1: 4px;
@@ -50,30 +94,35 @@
     --space-6: 24px;
     --space-8: 32px;
 
-    /* ── Radii ── */
-    --r-sm: 6px;
-    --r-md: 8px;
-    --r-lg: 12px;
-    --r-xl: 16px;
+    /* ── M3 shape scale ── */
+    --r-xs:   4px;
+    --r-sm:   8px;
+    --r-md:   12px;
+    --r-lg:   16px;
+    --r-xl:   28px;
+    --r-full: 9999px;
 
-    /* ── Shadow elevations ── */
-    --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
-    --shadow:    0 4px 16px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.3);
-    --shadow-lg: 0 12px 32px rgba(0,0,0,.5), 0 4px 8px rgba(0,0,0,.3);
+    /* ── M3 elevation (dark: tonal + soft shadow) ── */
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.30), 0 1px 3px 1px rgba(0,0,0,.15);
+    --shadow:    0 2px 6px 2px rgba(0,0,0,.15), 0 1px 2px rgba(0,0,0,.30);
+    --shadow-lg: 0 8px 24px 4px rgba(0,0,0,.25), 0 4px 8px rgba(0,0,0,.30);
 
-    /* ── Back-compat aliases for code that still references old names ── */
+    /* ── M3 type ── */
+    --md-font: "Roboto", "Roboto Flex", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+    /* ── Back-compat aliases ── */
     --panel:        var(--surface);
     --panel-2:      var(--surface-2);
     --panel-3:      var(--surface-3);
     --border-soft:  var(--border);
     --muted:        var(--text-3);
     --dim:          var(--text-4);
-    --user:         var(--surface-2);
-    --ai:           var(--surface-2);
-    --tool:         var(--surface-2);
-    --tool-border:  var(--border-strong);
-    --thinking:     var(--surface-2);
-    --thinking-border: var(--border-strong);
+    --user:         var(--md-primary-container);
+    --ai:           var(--md-surface-container-high);
+    --tool:         var(--md-surface-container);
+    --tool-border:  var(--border);
+    --thinking:     var(--md-surface-container);
+    --thinking-border: var(--border);
   }
 
   * { box-sizing: border-box; }
@@ -2747,6 +2796,136 @@
     main.workbench { grid-template-columns: 1fr; }
     .col.left, .col.right { display: none; }
   }
+
+  /* ════════════════════════════════════════════════════════════════════════
+   * MATERIAL 3 COMPONENT LAYER (m3.material.io) — appended last so these rules
+   * win ties over the original component styles. Restyles the app chrome to M3
+   * components (nav, buttons, text field, chips, cards, chat bubbles) on top of
+   * the M3 token remap in :root. State layers use ::before overlays at M3 opacity.
+   * ════════════════════════════════════════════════════════════════════════ */
+  body, button, input, textarea, select { font-family: var(--md-font); }
+  body { font-weight: 400; letter-spacing: .01em; -webkit-font-smoothing: antialiased; }
+
+  .msym { font-family: "Material Symbols Rounded"; font-weight: 400; font-style: normal;
+    line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap;
+    word-wrap: normal; direction: ltr; -webkit-font-feature-settings: "liga"; font-feature-settings: "liga";
+    -webkit-font-smoothing: antialiased; font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24; }
+
+  /* ── M3 Navigation: top tabs become a segmented bar with a pill active indicator ── */
+  .view-tab {
+    position: relative; border: 0 !important; background: transparent !important;
+    border-radius: var(--r-full) !important; padding: 8px 16px !important;
+    font-size: 14px; font-weight: 500; letter-spacing: .01em; color: var(--md-on-surface-variant) !important;
+    transition: background .15s, color .15s; cursor: pointer;
+  }
+  .view-tab:hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent) !important; color: var(--md-on-surface) !important; }
+  .view-tab[aria-selected="true"] {
+    background: var(--md-secondary-container) !important;
+    color: var(--md-on-secondary-container) !important;
+    box-shadow: none !important;
+  }
+  .view-tab[aria-selected="true"]::after { display: none !important; } /* drop old underline indicator */
+
+  /* ── M3 Filled button — pill, primary container, state layer ── */
+  #send, .btn, button.primary, .btn-primary {
+    border: 0 !important; border-radius: var(--r-full) !important;
+    background: var(--md-primary) !important; color: var(--md-on-primary) !important;
+    font-weight: 500; font-size: 14px; letter-spacing: .01em;
+    padding: 10px 20px !important; cursor: pointer; position: relative; overflow: hidden;
+    transition: box-shadow .15s, filter .15s; box-shadow: none;
+  }
+  #send:hover, .btn:hover, button.primary:hover, .btn-primary:hover { filter: brightness(1.05); box-shadow: var(--shadow-sm); }
+  #send:active, .btn:active { filter: brightness(.96); }
+  #send:disabled, .btn:disabled { background: color-mix(in srgb, var(--md-on-surface) 12%, transparent) !important;
+    color: color-mix(in srgb, var(--md-on-surface) 38%, transparent) !important; box-shadow: none; cursor: default; filter: none; }
+
+  /* ── M3 Icon button — circular 40px target, state layer ── */
+  .iconbtn {
+    border-radius: var(--r-full) !important; width: 40px; height: 40px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--md-on-surface-variant) !important; background: transparent !important; border: 0 !important;
+    transition: background .15s, color .15s;
+  }
+  .iconbtn:hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent) !important; color: var(--md-on-surface) !important; }
+  .iconbtn.danger:hover { color: var(--md-error) !important; background: color-mix(in srgb, var(--md-error) 8%, transparent) !important; }
+
+  /* ── M3 Filled text field — the composer ── */
+  form#composer {
+    background: var(--md-surface-container-high) !important;
+    border: 1px solid transparent !important; border-radius: var(--r-xl) !important;
+    box-shadow: none !important; transition: border-color .15s, background .15s;
+  }
+  form#composer:focus-within { border-color: var(--md-primary) !important; background: var(--md-surface-container-highest) !important; }
+  #text { background: transparent !important; color: var(--md-on-surface) !important; border: 0 !important; }
+  #text::placeholder { color: var(--md-on-surface-variant) !important; }
+  .session-search {
+    background: var(--md-surface-container-high) !important; border: 1px solid var(--md-outline-variant) !important;
+    border-radius: var(--r-full) !important; color: var(--md-on-surface) !important;
+  }
+  .session-search:focus { border-color: var(--md-primary) !important; box-shadow: 0 0 0 1px var(--md-primary) !important; }
+
+  /* ── M3 chat bubbles — tonal surfaces, rounded ── */
+  .msg.user .stack { background: var(--md-primary-container); color: var(--md-on-primary-container);
+    border-radius: var(--r-lg); padding: 10px 14px; }
+  .msg.ai .stack { /* AI replies stay on the page surface for readability of long content */ }
+  .msg.user .author .dot { background: var(--md-primary) !important; }
+  .msg.ai   .author .dot { background: var(--md-tertiary) !important; }
+  .msg.user .author .who { color: var(--md-on-surface-variant) !important; }
+  .msg.ai   .author .who { color: var(--md-on-surface-variant) !important; }
+
+  /* ── M3 selected list item (sessions) ── */
+  .session { border-radius: var(--r-lg) !important; }
+  .session:hover { background: color-mix(in srgb, var(--md-on-surface) 8%, transparent) !important; }
+  .session.active { background: var(--md-secondary-container) !important; }
+  .session.active .title { color: var(--md-on-secondary-container) !important; }
+  .session.active::before { background: var(--md-primary) !important; }
+
+  /* ── M3 chips / pills / cards ── */
+  .fin-pill, .chip { border-radius: var(--r-sm) !important; border: 1px solid var(--md-outline-variant) !important;
+    background: transparent !important; color: var(--md-on-surface-variant) !important; }
+  .fin-tabs { border-radius: var(--r-full) !important; background: var(--md-surface-container-high) !important; border: 0 !important; }
+  .fin-tab-btn { border-radius: var(--r-full) !important; color: var(--md-on-surface-variant) !important; }
+  .fin-tab-btn.active { background: var(--md-secondary-container) !important; color: var(--md-on-secondary-container) !important; }
+  .fin-wrap, .card { border-radius: var(--r-md) !important; border: 1px solid var(--md-outline-variant) !important;
+    background: var(--md-surface-container) !important; }
+
+  /* ── M3 scrollbar + focus ── */
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-thumb { background: var(--md-outline-variant); border-radius: var(--r-full); }
+  *::-webkit-scrollbar-thumb:hover { background: var(--md-outline); }
+  :focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+
+  /* ── M3 data components (agent tiles, pipeline progress, tables, dialogs) ── */
+  .agent-node { border-radius: var(--r-md) !important; border: 1px solid var(--md-outline-variant) !important;
+    background: var(--md-surface-container) !important; }
+  .agent-node-icon { border-radius: var(--r-full) !important; }
+  .agent-node[data-status="done"]    .agent-node-icon { background: color-mix(in srgb, var(--ok) 16%, transparent) !important; color: var(--ok) !important; }
+  .agent-node[data-status="error"]   .agent-node-icon { background: color-mix(in srgb, var(--md-error) 16%, transparent) !important; color: var(--md-error) !important; }
+  .agent-node[data-status="running"] .agent-node-icon { background: var(--md-primary-container) !important; color: var(--md-on-primary-container) !important; }
+  .agent-node[data-status="running"] .agent-node-status { color: var(--md-primary) !important; }
+  .agent-node-rerun { border-radius: var(--r-full) !important; border: 1px solid var(--md-outline-variant) !important;
+    background: transparent !important; color: var(--md-on-surface-variant) !important; }
+  .agent-node-rerun:hover { color: var(--md-on-primary-container) !important;
+    background: var(--md-primary-container) !important; border-color: transparent !important; }
+
+  .pipeline-progress { border-radius: var(--r-lg) !important; background: var(--md-surface-container) !important;
+    border: 1px solid var(--md-outline-variant) !important; }
+  .pipeline-progress-percent { color: var(--md-primary) !important; }
+  .pipeline-progress-track { background: var(--md-surface-container-highest) !important; border-radius: var(--r-full) !important; }
+  .pipeline-progress-fill { background: var(--md-primary) !important; border-radius: var(--r-full) !important; }
+  .pipeline-progress[data-state="done"] .pipeline-progress-fill { background: var(--ok) !important; }
+  .pipeline-progress[data-state="error"] .pipeline-progress-fill { background: var(--md-error) !important; }
+
+  .fin-table { border-radius: var(--r-md) !important; overflow: hidden; }
+  .fin-table th { background: var(--md-surface-container-high) !important; color: var(--md-on-surface-variant) !important;
+    border-bottom: 1px solid var(--md-outline-variant) !important; }
+  .fin-table td { border-bottom: 1px solid var(--md-outline-variant) !important; }
+
+  /* ── M3 dialog ── */
+  .modal-backdrop { background: color-mix(in srgb, #000 60%, transparent) !important; }
+  .modal { border-radius: var(--r-xl) !important; background: var(--md-surface-container-high) !important;
+    border: 1px solid var(--md-outline-variant) !important; box-shadow: var(--shadow-lg) !important; }
+  .modal-head h2 { color: var(--md-on-surface) !important; font-weight: 500; }
 </style>
 <!-- TradingView's lightweight-charts — used for the advanced chart-interactive fence
      (multi-timeframe candle/line/area with SMA overlay + volume). Lazy-loaded via
@@ -7241,6 +7420,68 @@ ensureEventSubscription(state.chatId);
 ta.focus();
 // Auto-refresh usage telemetry every 10s while the page is open.
 setInterval(() => { if (!document.hidden) loadUsage(); }, 10_000);
+
+// ───────────────────────── Reminder alerts (focus-independent) ─────────────────────────
+// A SECOND, always-on EventSource pinned to the fixed reminders-<userId> chat. It is NEVER
+// torn down on chat switch (separate from currentEventSource), so a fired reminder alerts no
+// matter which view is open. The chat stream's named-event allow-list omits 'ReminderFired',
+// so it's ignored there — this stream is the sole alert path. Four channels: toast, tab badge,
+// desktop notification, chime. Permission + audio need a user gesture (armed on first input).
+let _unseenReminders = 0;
+const _seenReminderKeys = new Set();
+let _remindersBackfillUntil = 0;
+
+function setTitleBadge(n) { document.title = (n > 0 ? '(' + n + ') ' : '') + 'Nizo'; }
+
+function _remChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+    const ctx = new Ctx(); const o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination); o.type = 'sine'; o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+    o.start(); o.stop(ctx.currentTime + 0.52);
+    setTimeout(() => { try { ctx.close(); } catch {} }, 800);
+  } catch (e) { /* audio blocked until a user gesture — toast is the floor */ }
+}
+
+function onReminderFired(payload) {
+  const key = (payload.taskId || '') + '|' + (payload.prompt || '');
+  if (_seenReminderKeys.has(key)) return;       // never alert the same fire twice
+  _seenReminderKeys.add(key);
+  if (Date.now() < _remindersBackfillUntil) return;  // suppress the replay burst on (re)connect
+  const text = payload.prompt || 'Reminder';
+  try { toast({ kind: 'info', title: '⏰ Reminder', text, duration: 10000 }); } catch {}
+  if (document.hidden) setTitleBadge(++_unseenReminders);
+  try { if (window.Notification && Notification.permission === 'granted')
+          new Notification('⏰ Nizo reminder', { body: text, tag: key }); } catch {}
+  _remChime();
+}
+
+function _openAlertsStream() {
+  _remindersBackfillUntil = Date.now() + 2000;   // ignore the initial ring replay so reloads don't re-alert
+  const es = new EventSource('/api/chat/events?chatId='
+              + encodeURIComponent('reminders-' + nizoUserId()) + '&since=0');
+  es.addEventListener('ReminderFired', (e) => { try { onReminderFired(JSON.parse(e.data)); } catch {} });
+  es.onerror = () => { try { es.close(); } catch {} setTimeout(_openAlertsStream, 4000); };
+  return es;
+}
+let _alertsES = _openAlertsStream();
+
+// Clear the unseen badge when the tab regains focus.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { _unseenReminders = 0; setTitleBadge(0); }
+});
+
+// Notification permission + audio unlock require a user gesture — arm once on first interaction.
+function _armReminders() {
+  try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch {}
+  window.removeEventListener('pointerdown', _armReminders);
+  window.removeEventListener('keydown', _armReminders);
+}
+window.addEventListener('pointerdown', _armReminders, { once: true });
+window.addEventListener('keydown', _armReminders, { once: true });
 const usageBtn = document.getElementById('usageRefresh');
 if (usageBtn) usageBtn.addEventListener('click', () => loadUsage());
 
