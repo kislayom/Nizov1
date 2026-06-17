@@ -167,7 +167,115 @@ public final class WebSearchTool implements Tool {
                 LOG.warn("SmartProxy fetch failed: {}", e.toString());
             }
         }
+        // ── Reliable keyless floor ──────────────────────────────────────────────────────────
+        // Every engine above can be (and currently is) bot-blocked on this server's IP. These two
+        // are different: official JSON APIs that do NOT bot-block server callers and need no key, so
+        // they keep `web_search` from ever returning "(no results)" on a factual/encyclopedic query.
+        // Lower coverage than full web search (instant answers + encyclopedia), so they run LAST.
+        try {
+            List<Result> r = searchDuckDuckGoInstant(query, limit);
+            if (!r.isEmpty()) { LOG.info("served {} result(s) from DuckDuckGo Instant Answer floor", r.size()); return r; }
+        } catch (Exception e) {
+            LOG.warn("DDG instant-answer failed: {}", e.toString());
+        }
+        try {
+            List<Result> r = searchWikipedia(query, limit);
+            if (!r.isEmpty()) { LOG.info("served {} result(s) from Wikipedia floor", r.size()); return r; }
+        } catch (Exception e) {
+            LOG.warn("Wikipedia failed: {}", e.toString());
+        }
         return java.util.Collections.emptyList();
+    }
+
+    /**
+     * DuckDuckGo Instant Answer API — official keyless JSON endpoint (api.duckduckgo.com). Unlike the
+     * HTML scrape it does not serve the "anomaly" wall to server IPs. Returns a topic abstract plus
+     * related topics; good for definitional / entity queries, thin for long-tail. IP-agnostic.
+     */
+    List<Result> searchDuckDuckGoInstant(String query, int limit) throws Exception {
+        String url = "https://api.duckduckgo.com/?format=json&no_html=1&no_redirect=1&skip_disambig=1&t=nizo&q="
+                + URLEncoder.encode(query, StandardCharsets.UTF_8);
+        URI uri = URI.create(url);
+        SsrfGuard.assertSafe(uri);
+        HttpResponse<String> resp = http.send(
+                HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofSeconds(12))
+                        .header("User-Agent", UA)
+                        .header("Accept", "application/json")
+                        .GET().build(),
+                BoundedHttp.ofString());
+        if (resp.statusCode() / 100 != 2) throw new RuntimeException("ddg-ia HTTP " + resp.statusCode());
+        return parseDuckDuckGoInstant(resp.body(), limit);
+    }
+
+    /** Parse the DDG Instant Answer JSON into results. Package-private for unit testing. */
+    static List<Result> parseDuckDuckGoInstant(String json, int limit) throws Exception {
+        JsonNode root = MAPPER.readTree(json);
+        List<Result> out = new ArrayList<>();
+        String abstractText = root.path("AbstractText").asText("").trim();
+        String abstractUrl  = root.path("AbstractURL").asText("").trim();
+        String heading      = root.path("Heading").asText("").trim();
+        if (!abstractText.isEmpty() && !abstractUrl.isEmpty()) {
+            out.add(new Result(heading.isEmpty() ? abstractText : heading, abstractUrl, abstractText));
+        }
+        // RelatedTopics: a mix of {Text, FirstURL} leaves and {Topics:[...]} groups. Flatten one level.
+        collectDdgTopics(root.path("RelatedTopics"), out, limit);
+        return out.size() > limit ? out.subList(0, limit) : out;
+    }
+
+    private static void collectDdgTopics(JsonNode topics, List<Result> out, int limit) {
+        if (!topics.isArray()) return;
+        for (JsonNode t : topics) {
+            if (out.size() >= limit) return;
+            if (t.has("Topics")) { collectDdgTopics(t.path("Topics"), out, limit); continue; }
+            String text = t.path("Text").asText("").trim();
+            String u    = t.path("FirstURL").asText("").trim();
+            if (text.isEmpty() || u.isEmpty()) continue;
+            // The leading clause before " - " is the entity name; keep the whole thing as snippet.
+            int dash = text.indexOf(" - ");
+            String title = dash > 0 ? text.substring(0, dash).trim() : text;
+            out.add(new Result(title, u, text));
+        }
+    }
+
+    /**
+     * Wikipedia search via the MediaWiki API — keyless, never bot-blocks server callers, always up.
+     * Excellent for the factual / encyclopedic slice of queries; the snippet HTML is stripped. The
+     * absolute last resort so a factual question always gets a grounded, citable answer. IP-agnostic.
+     */
+    List<Result> searchWikipedia(String query, int limit) throws Exception {
+        String url = "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit="
+                + Math.max(1, Math.min(limit, 10)) + "&srsearch=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
+        URI uri = URI.create(url);
+        SsrfGuard.assertSafe(uri);
+        HttpResponse<String> resp = http.send(
+                HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofSeconds(12))
+                        .header("User-Agent", UA)
+                        .header("Accept", "application/json")
+                        .GET().build(),
+                BoundedHttp.ofString());
+        if (resp.statusCode() / 100 != 2) throw new RuntimeException("wikipedia HTTP " + resp.statusCode());
+        return parseWikipedia(resp.body(), limit);
+    }
+
+    /** Parse MediaWiki search JSON into results. Package-private for unit testing. */
+    static List<Result> parseWikipedia(String json, int limit) throws Exception {
+        JsonNode root = MAPPER.readTree(json);
+        List<Result> out = new ArrayList<>();
+        for (JsonNode hit : root.path("query").path("search")) {
+            if (out.size() >= limit) break;
+            String title = hit.path("title").asText("").trim();
+            if (title.isEmpty()) continue;
+            String pageUrl = "https://en.wikipedia.org/wiki/"
+                    + URLEncoder.encode(title.replace(' ', '_'), StandardCharsets.UTF_8).replace("%2F", "/");
+            // The "snippet" field is HTML with <span class="searchmatch"> highlights — strip tags + entities.
+            String snippet = hit.path("snippet").asText("")
+                    .replaceAll("<[^>]+>", "").replace("&quot;", "\"").replace("&amp;", "&")
+                    .replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").trim();
+            out.add(new Result(title, pageUrl, snippet));
+        }
+        return out;
     }
 
     // ---- providers ----
