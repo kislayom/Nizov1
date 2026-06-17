@@ -1346,6 +1346,125 @@ async def generate_video(body: dict = Body(...)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Bedtime-story narrator — render a structured script into one mixed audio track:
+# multi-voice TTS (Kokoro voices per character; XTTS clone for the personalised narrator)
+# + an optional gentle MusicGen bed ducked underneath. Returns base64 mp3.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_KOKORO_PREFIXES = ("af_", "am_", "bf_", "bm_")
+
+
+def _synth_line(text, voice, voice_sample_wav, language="en"):
+    """One line in its assigned voice → pydub AudioSegment. Kokoro for af_/am_/bf_/bm_ voices
+    (CPU, fast); XTTS for 'clone' (speaker_wav) or a built-in XTTS speaker name."""
+    from pydub import AudioSegment
+    import soundfile as sf, numpy as np
+    out_fd, wav = tempfile.mkstemp(suffix=".wav"); os.close(out_fd)
+    try:
+        if voice and voice.startswith(_KOKORO_PREFIXES):
+            pipe = get_kokoro()
+            chunks = []
+            for _, _, a in pipe(text, voice=voice, speed=0.95):   # a touch slow = soothing
+                if hasattr(a, "cpu"): a = a.cpu().numpy()
+                chunks.append(a)
+            wave = np.concatenate(chunks) if chunks else np.zeros(0, dtype="float32")
+            sf.write(wav, wave, 24000)
+        else:
+            m = get_xtts()   # already resident on CUDA — coexists with Qwen, no pause needed
+            kwargs = {"text": text, "file_path": wav, "language": language}
+            if voice == "clone" and voice_sample_wav and os.path.exists(voice_sample_wav):
+                kwargs["speaker_wav"] = voice_sample_wav
+            else:
+                kwargs["speaker"] = (voice if voice and voice != "clone"
+                                     else os.environ.get("XTTS_DEFAULT_SPEAKER", "Ana Florence"))
+            m.tts_to_file(**kwargs)
+        return AudioSegment.from_file(wav)
+    finally:
+        try: os.unlink(wav)
+        except OSError: pass
+
+
+def _music_bed(prompt, target_ms):
+    """A gentle ~20s MusicGen loop, tiled+crossfaded to target_ms. Best-effort: returns None on
+    any failure so the story still renders narration-only. Caller wraps in llama_paused()."""
+    try:
+        from pydub import AudioSegment
+        import soundfile as sf, torch
+        model, proc = get_musicgen("small")    # small = plenty for a soft bed, and fastest
+        inputs = proc(text=[prompt], padding=True, return_tensors="pt")
+        with gpu_swap(model):
+            inputs = {k: v.to("cuda") for k, v in inputs.items()}
+            with torch.no_grad():
+                tokens = model.generate(**inputs, max_new_tokens=1000)   # ~20s
+        sr = model.config.audio_encoder.sampling_rate
+        wave = tokens[0, 0].cpu().numpy()
+        out_fd, wav = tempfile.mkstemp(suffix=".wav"); os.close(out_fd)
+        sf.write(wav, wave, sr)
+        seg = AudioSegment.from_file(wav)
+        try: os.unlink(wav)
+        except OSError: pass
+        if len(seg) < 1000:
+            return None
+        bed = seg
+        while len(bed) < target_ms:
+            bed = bed.append(seg, crossfade=min(1500, len(seg) // 2))
+        return bed[:target_ms].fade_in(1500).fade_out(2500)
+    except Exception as e:
+        log.warning("music bed failed (%s) — narration only", e)
+        return None
+
+
+@app.post("/narrate-story")
+async def narrate_story(body: dict = Body(...)):
+    import base64
+    from pydub import AudioSegment
+    segments = body.get("segments") or []
+    if not segments:
+        raise HTTPException(status_code=400, detail="segments required")
+    characters = {c.get("name"): c.get("voice") for c in (body.get("characters") or [])}
+    voice_sample = body.get("voiceSampleWav") or body.get("voice_sample_wav") or ""
+    language = (body.get("language") or "en").lower()
+    music_prompt = (body.get("musicPrompt") or "").strip()
+    gap_ms = int(body.get("gapMs", 350))
+
+    narration = AudioSegment.silent(duration=200)
+    rendered = 0
+    for seg in segments:
+        spk = seg.get("speaker") or "NARRATOR"
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        voice = seg.get("voice") or characters.get(spk) or "clone"
+        try:
+            line = _synth_line(text, voice, voice_sample, language)
+        except Exception as e:
+            log.warning("segment synth failed (spk=%s voice=%s): %s", spk, voice, e)
+            continue
+        narration += line + AudioSegment.silent(duration=gap_ms)
+        rendered += 1
+
+    total_ms = len(narration)
+    final = narration
+    if music_prompt:
+        with llama_paused():           # only the MusicGen swap needs the full GPU
+            bed = _music_bed(music_prompt, total_ms)
+        if bed is not None:
+            final = narration.overlay(bed - 18)   # bed ~18 dB under the voices
+
+    out_fd, out_path = tempfile.mkstemp(suffix=".mp3"); os.close(out_fd)
+    try:
+        final.export(out_path, format="mp3", bitrate="128k")
+        with open(out_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return JSONResponse({"ok": True, "mime": "audio/mp3", "audio_b64": b64,
+                             "durationSec": round(total_ms / 1000.0, 1),
+                             "segments": rendered})
+    finally:
+        try: os.unlink(out_path)
+        except OSError: pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 

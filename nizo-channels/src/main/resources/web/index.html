@@ -2932,6 +2932,10 @@
     border-radius: var(--r-md); border: 1px solid var(--md-outline-variant);
     background: var(--md-surface-container); }
   video.gen-media { width: 100%; max-width: 640px; }
+  .gen-audio { margin: 10px 0; padding: 12px; border-radius: var(--r-md);
+    border: 1px solid var(--md-outline-variant); background: var(--md-surface-container); max-width: 560px; }
+  .gen-audio-title { font-size: 14px; font-weight: 500; color: var(--md-on-surface); margin-bottom: 8px; }
+  audio.gen-media { width: 100%; border: 0; background: transparent; }
 </style>
 <!-- TradingView's lightweight-charts — used for the advanced chart-interactive fence
      (multi-timeframe candle/line/area with SMA overlay + volume). Lazy-loaded via
@@ -5343,6 +5347,11 @@ function renderMarkdown(src) {
       const alt = mediaM[1], url = mediaM[2];
       if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) {
         root.appendChild(el('video', { class: 'gen-media', src: url, controls: '', playsinline: '', preload: 'metadata' }));
+      } else if (/\.(mp3|wav|ogg|m4a|flac)(\?|$)/i.test(url)) {
+        const wrap = el('div', { class: 'gen-audio' });
+        if (alt) wrap.appendChild(el('div', { class: 'gen-audio-title' }, '🎧 ' + alt));
+        wrap.appendChild(el('audio', { class: 'gen-media', src: url, controls: '', preload: 'metadata' }));
+        root.appendChild(wrap);
       } else {
         root.appendChild(el('img', { class: 'gen-media', src: url, alt: alt, loading: 'lazy' }));
       }

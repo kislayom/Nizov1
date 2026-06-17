@@ -1,0 +1,207 @@
+package ai.nizo.skills;
+
+import ai.nizo.api.llm.ChatMessage;
+import ai.nizo.api.llm.ChatRequest;
+import ai.nizo.api.llm.ChatResponse;
+import ai.nizo.api.llm.LlmClient;
+import ai.nizo.api.tool.Tool;
+import ai.nizo.api.tool.ToolResult;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Personalised, multi-voice bedtime stories rendered to audio. Two stages:
+ * <ol>
+ *   <li><b>Script (LLM):</b> Qwen writes a calming, age-appropriate story as a STRUCTURED SCRIPT —
+ *       title, a cast with a voice assigned per character (the narrator is the cloned parent voice),
+ *       and ordered segments {speaker, text, sfx?} + a music mood prompt.</li>
+ *   <li><b>Render (sidecar):</b> POST the script to {@code /narrate-story} — per-segment multi-voice
+ *       TTS (Kokoro voices + XTTS clone) mixed with a gentle ducked MusicGen bed → one mp3.</li>
+ * </ol>
+ * Saves the mp3 into the workspace and returns a markdown audio reference the chat plays inline.
+ *
+ * <p>v1 renders synchronously — keep stories short (a couple of minutes) until the async/two-part
+ * split lands. Forces HTTP/1.1 to the uvicorn sidecar.
+ */
+public final class BedtimeStoryTool implements Tool {
+
+    private static final Logger LOG = LoggerFactory.getLogger(BedtimeStoryTool.class);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ExecutorService TIMEOUT_EXEC =
+            Executors.newCachedThreadPool(r -> { Thread t = new Thread(r, "bedtime-llm"); t.setDaemon(true); return t; });
+
+    /** Curated soothing voice palette offered to the LLM for casting (Kokoro ids + the clone token). */
+    private static final String VOICE_PALETTE =
+        "NARRATOR must be \"clone\" (the parent's cloned voice). Character voice ids to choose from: "
+      + "af_heart (warm gentle female), af_bella (bright young female — good for child characters), "
+      + "af_nicole (soft whisper female), af_sarah (calm female), am_michael (deep warm male — big animals), "
+      + "am_adam (friendly male), am_puck (playful male — small creatures), bf_emma (British female), "
+      + "bm_george (British male). Pick a voice that fits each character's size/personality.";
+
+    private final LlmClient llm;
+    private final String model;
+    private final Path workspace;
+    private final String sidecarUrl;
+    private final HttpClient http = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(10)).build();
+
+    public BedtimeStoryTool(LlmClient llm, String model, Path workspace) {
+        this(llm, model, workspace, System.getenv().getOrDefault("NIZO_VOICE_URL", "http://127.0.0.1:7780"));
+    }
+
+    public BedtimeStoryTool(LlmClient llm, String model, Path workspace, String sidecarUrl) {
+        this.llm = llm; this.model = model; this.workspace = workspace;
+        this.sidecarUrl = sidecarUrl.endsWith("/") ? sidecarUrl.substring(0, sidecarUrl.length() - 1) : sidecarUrl;
+    }
+
+    @Override public String name() { return "bedtime_story"; }
+
+    @Override
+    public String description() {
+        return "Create a personalised, multi-voice bedtime STORY as narrated audio (different voices "
+             + "per character, a gentle music bed, soothing pace). Use when the user asks for a bedtime "
+             + "story / story for a child. Renders to an audio file — takes a minute or two. Returns a "
+             + "markdown audio reference; include it VERBATIM in your reply so the child can press play.";
+    }
+
+    @Override
+    public String parametersJsonSchema() {
+        return """
+            {"type":"object","properties":{
+              "child":{"type":"string","description":"The child's name (personalises the hero)."},
+              "about":{"type":"string","description":"What it should be about — theme, characters, setting, a lesson."},
+              "minutes":{"type":"number","description":"Target length in minutes (default 2; keep small for now)."},
+              "language":{"type":"string","description":"ISO code, default 'en'."}
+            },"required":["about"]}""";
+    }
+
+    @Override
+    public ToolResult execute(String argumentsJson) throws Exception {
+        JsonNode args = MAPPER.readTree(argumentsJson == null || argumentsJson.isBlank() ? "{}" : argumentsJson);
+        String about = args.path("about").asText("").trim();
+        if (about.isEmpty()) return ToolResult.error("'about' is required — what should the story be about?");
+        String child = args.path("child").asText("").trim();
+        double minutes = Math.max(0.5, Math.min(6.0, args.path("minutes").asDouble(2.0)));
+        String language = args.path("language").asText("en").trim();
+        int words = (int) Math.round(minutes * 150);   // ~150 wpm narration
+
+        // ── 1. LLM writes the structured script ──
+        String sys = """
+            You are a gentle bedtime-storyteller for a young child. Write a SOOTHING, age-appropriate story:
+            nothing scary, kind characters, a soft and happy ending that winds down sleepily. Calm rhythm,
+            short sentences, a little wonder. %s
+
+            Output ONLY a JSON object, no prose, no markdown fences, with EXACTLY this shape:
+            {
+              "title": "string",
+              "musicPrompt": "a short text prompt for a gentle instrumental bed, e.g. 'soft music-box lullaby, warm and slow'",
+              "characters": [{"name":"NARRATOR","voice":"clone"}, {"name":"LION","voice":"am_michael"}],
+              "segments": [{"speaker":"NARRATOR","text":"..."}, {"speaker":"LION","text":"..."}]
+            }
+            %s
+            Aim for about %d words total across the segments. Use the child's name if given. Keep each segment
+            one or two sentences. You MAY add "sfx" to a segment (e.g. {"sfx":"gentle stream"}) for a vivid
+            calm moment, sparingly. The final 2-3 segments should be very calm and sleepy.
+            """.formatted(child.isEmpty() ? "" : "The hero is named " + child + ".", VOICE_PALETTE, words);
+
+        String user = "Write the bedtime story. It is about: " + about
+                    + (child.isEmpty() ? "" : "\nHero's name: " + child);
+
+        ChatResponse resp = chatWithTimeout(ChatRequest.of(model, List.of(ChatMessage.system(sys), ChatMessage.user(user)))
+                .withExtraBody(Map.of("chat_template_kwargs", Map.of("enable_thinking", false))), 180);
+        String raw = resp.content() == null ? "" : resp.content().strip();
+        JsonNode script = extractJson(raw);
+        if (script == null || !script.has("segments") || !script.path("segments").isArray()
+                || script.path("segments").isEmpty()) {
+            return ToolResult.error("could not produce a valid story script (LLM output was not parseable JSON).");
+        }
+        String title = script.path("title").asText("A Bedtime Story");
+
+        // ── 2. Render via the sidecar ──
+        HttpResponse<String> r;
+        try {
+            r = http.send(HttpRequest.newBuilder(URI.create(sidecarUrl + "/narrate-story"))
+                    .timeout(Duration.ofMinutes(20))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(script), StandardCharsets.UTF_8))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+        } catch (java.net.ConnectException e) {
+            return ToolResult.error("voice sidecar not reachable at " + sidecarUrl + " — is nizo-voice running?");
+        }
+        if (r.statusCode() / 100 != 2) {
+            String d = r.body() == null ? "" : r.body();
+            return ToolResult.error("story render failed (HTTP " + r.statusCode() + "): " + d.substring(0, Math.min(300, d.length())));
+        }
+        JsonNode out = MAPPER.readTree(r.body());
+        String b64 = out.path("audio_b64").asText("");
+        if (b64.isEmpty()) return ToolResult.error("renderer returned no audio");
+        byte[] mp3 = Base64.getDecoder().decode(b64);
+
+        Path genDir = workspace.resolve("gen");
+        Files.createDirectories(genDir);
+        String fname = "story-" + UUID.randomUUID().toString().substring(0, 8) + ".mp3";
+        Files.write(genDir.resolve(fname), mp3);
+
+        double dur = out.path("durationSec").asDouble(0);
+        int segs = out.path("segments").asInt(0);
+        String url = "/api/workspace/file?path=gen/" + fname;
+        LOG.info("bedtime_story '{}' -> {} ({} segments, {}s, {} bytes)", title, fname, segs, dur, mp3.length);
+        return ToolResult.ok("Story ready: **" + title + "** (" + segs + " parts, ~"
+                + Math.round(dur) + "s)\n\n"
+                + "![" + title.replace("]", " ") + "](" + url + ")\n\n"
+                + "(Include the line above verbatim so the child can press play.)");
+    }
+
+    /** Pull the first balanced {...} JSON object out of an LLM reply (tolerates fences/prose). */
+    static JsonNode extractJson(String s) {
+        if (s == null) return null;
+        int start = s.indexOf('{');
+        if (start < 0) return null;
+        int depth = 0; boolean inStr = false; boolean esc = false;
+        for (int i = start; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (inStr) {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+            } else {
+                if (c == '"') inStr = true;
+                else if (c == '{') depth++;
+                else if (c == '}') { depth--; if (depth == 0) {
+                    try { return MAPPER.readTree(s.substring(start, i + 1)); }
+                    catch (Exception e) { return null; }
+                } }
+            }
+        }
+        return null;
+    }
+
+    private ChatResponse chatWithTimeout(ChatRequest req, int seconds) throws Exception {
+        Future<ChatResponse> f = TIMEOUT_EXEC.submit(() -> llm.chat(req));
+        try {
+            return f.get(seconds, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            f.cancel(true);
+            throw e;
+        }
+    }
+}

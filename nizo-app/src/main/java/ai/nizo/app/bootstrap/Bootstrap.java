@@ -192,6 +192,7 @@ public final class Bootstrap implements AutoCloseable {
                 .add(measure.apply(new ai.nizo.tools.vision.ImageAnalyzeTool(llmClient, llmConfig.model(), home.workspace())))  // the agent's eyes
                 .add(measure.apply(new ai.nizo.tools.media.MediaGenTool(ai.nizo.tools.media.MediaGenTool.Mode.IMAGE, home.workspace())))  // text->image (FLUX.1-schnell)
                 .add(measure.apply(new ai.nizo.tools.media.MediaGenTool(ai.nizo.tools.media.MediaGenTool.Mode.VIDEO, home.workspace())))  // text->video (LTX-Video)
+                .add(measure.apply(new ai.nizo.skills.BedtimeStoryTool(llmClient, llmConfig.model(), home.workspace())))  // multi-voice narrated bedtime stories
                 .add(measure.apply(new MemoryRememberTool(userFacts)))
                 .add(measure.apply(new MemoryRecallTool(userFacts)))
                 .add(measure.apply(new MemoryForgetTool(userFacts)))
