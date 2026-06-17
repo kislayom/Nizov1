@@ -1,21 +1,17 @@
 [Unit]
-Description=Nizo GPU power cap — 250W for NETWORK stability under sustained load (not thermal)
-# NOTE the ordering: do NOT add `After=multi-user.target` here. nizo-llama is WantedBy
-# multi-user.target, and this unit is Before=nizo-llama, so After=multi-user.target creates an
-# ordering cycle that systemd breaks by silently deleting this job — leaving the box uncapped at
-# boot (observed 2026-06-17). Being WantedBy=multi-user.target + Before=nizo-llama is sufficient to
-# run before the LLM server. After=local-fs.target just ensures the filesystem (and nvidia device
-# nodes) are ready.
+# DORMANT CONTINGENCY — this unit is intentionally DISABLED. The box runs full 300W; thermals are
+# handled by nizo-gpu-thermal (fan). There is NO proven load-fault: a "network drop under load" once
+# suspected turned out to be an intentional operator shutdown (2026-06-17), so no power cap is
+# justified. Keep this file only so a 250W cap can be re-enabled quickly IF a genuine, unexplained,
+# confirmed-not-user-initiated load-drop is ever actually observed. Do not enable it speculatively.
+Description=Nizo GPU power cap — 250W (DISABLED contingency; enable only on a confirmed load-fault)
+# Ordering note (kept correct for if it's ever enabled): do NOT add After=multi-user.target — that
+# plus WantedBy=multi-user.target plus Before=nizo-llama (itself in multi-user.target) is an ordering
+# cycle systemd breaks by deleting this job, leaving the box uncapped at boot.
 After=local-fs.target
 Before=nizo-llama.service
 
 [Service]
-# Cap the RTX PRO 5000 from 300W to 250W at boot. Under sustained 300W load the box DROPS OFF THE
-# NETWORK (hard down, WoL to recover) — reproduced 2026-06-17. The GPU stays cool the whole time
-# (fan governor holds <75C), so the drop is power/electrical (PSU headroom), NOT thermal — a fan
-# can't fix it, only a lower power ceiling. Decode speed is ~identical at 250 vs 300W (32.7 vs 33.0
-# tok/s); only prefill loses a little. nvidia-smi -pl does not persist across reboot, so reapply
-# every boot, before the LLM server starts. Pairs with nizo-gpu-thermal (fan) for thermals.
 Type=oneshot
 ExecStart=/usr/bin/nvidia-smi -pl 250
 RemainAfterExit=yes

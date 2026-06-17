@@ -4,18 +4,15 @@ speed needed, and nothing else. GPU fan only; the power limit is never touched.
 
 Why
 ---
-This governs the GPU's TEMPERATURE. It does NOT (and must not) replace the 250W power cap —
-those solve two different problems and BOTH are kept:
-  * Power cap (nizo-gpucap, 250W): prevents the box dropping off the network under sustained
-    load. That drop is power/electrical (PSU headroom) — it reproduced at 300W even while this
-    governor kept the GPU cool, so a fan can't fix it.
-  * This fan governor: prevents thermal CLOCK throttling. Within the 250W envelope the lazy
-    BIOS fan curve (30->50%) still lets the core ride to ~79C and throttle clocks
-    (2512->2317 MHz); we hold it lower with the minimum fan instead.
-Closed loop on core temperature: nudge ONLY the GPU fan up as the core climbs toward the
-target, ease it down when there's headroom, settle on the quietest speed under the ceiling.
-Never touches the power limit, never touches any chassis/CPU fan (NVML exposes only the GPU's
-own fan), restores the BIOS auto curve on exit.
+The GPU runs at the FULL 300W power limit (no cap — there is no proven load-fault; a "network
+drop under load" once suspected turned out to be an intentional shutdown by the operator). This
+daemon is the ONLY thermal mechanism: without it the lazy BIOS fan curve (30->50%) lets the core
+ride to ~79C under sustained load and throttle clocks (2512->2317 MHz). It holds the core near
+the target with the minimum fan instead, so we keep full clocks at full power.
+Closed loop on core temperature: nudge ONLY the GPU fan up as the core climbs toward the target,
+ease it down when there's headroom, settle on the quietest speed under the ceiling. Never touches
+the power limit, never touches any chassis/CPU fan (NVML exposes only the GPU's own fan), restores
+the BIOS auto curve on exit.
 
 Method (same as nizo-mon.py): NVML `nvmlDeviceSetFanSpeed_v2` — no Coolbits / Xvfb /
 nvidia-settings. Must run as root.
