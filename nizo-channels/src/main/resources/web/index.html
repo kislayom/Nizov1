@@ -2926,6 +2926,12 @@
   .modal { border-radius: var(--r-xl) !important; background: var(--md-surface-container-high) !important;
     border: 1px solid var(--md-outline-variant) !important; box-shadow: var(--shadow-lg) !important; }
   .modal-head h2 { color: var(--md-on-surface) !important; font-weight: 500; }
+
+  /* ── Generated media (image_generate / video_generate) ── */
+  .gen-media { display: block; max-width: 100%; height: auto; margin: 10px 0;
+    border-radius: var(--r-md); border: 1px solid var(--md-outline-variant);
+    background: var(--md-surface-container); }
+  video.gen-media { width: 100%; max-width: 640px; }
 </style>
 <!-- TradingView's lightweight-charts — used for the advanced chart-interactive fence
      (multi-timeframe candle/line/area with SMA overlay + volume). Lazy-loaded via
@@ -5327,6 +5333,21 @@ function renderMarkdown(src) {
 
   while (i < lines.length) {
     const line = lines[i];
+
+    // Generated-media reference on its own line: ![alt](/api/workspace/file?path=gen/…) →
+    // inline <img>, or <video controls> when the url is a clip. Restricted to workspace-served
+    // files so the agent can only surface media it actually produced.
+    const mediaM = /^!\[([^\]]*)\]\((\/api\/workspace\/file\?path=[^)]+)\)\s*$/.exec(line.trim());
+    if (mediaM) {
+      flushPara(para); para = [];
+      const alt = mediaM[1], url = mediaM[2];
+      if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) {
+        root.appendChild(el('video', { class: 'gen-media', src: url, controls: '', playsinline: '', preload: 'metadata' }));
+      } else {
+        root.appendChild(el('img', { class: 'gen-media', src: url, alt: alt, loading: 'lazy' }));
+      }
+      i++; continue;
+    }
 
     // Fenced code block: ```lang ... ```
     // Allow hyphens in the language identifier so multi-word fence types like

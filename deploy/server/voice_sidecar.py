@@ -184,14 +184,23 @@ def _pause_llama(min_free_mib: int = 30000, wait_sec: int = 20) -> bool:
             log.info("llama: not running, skipping pause")
             return False
         try:
-            log.info("llama: stopping nizo-llama to free VRAM for YuE")
+            log.info("llama: stopping nizo-llama to free VRAM for heavy GPU work")
+            # 90s, not 15s: stopping the 33GB llama-server (SIGTERM + munmap + unit teardown) can
+            # take well over 15s, especially under disk contention. A too-short timeout raised
+            # TimeoutExpired here, which (a) callers mislabeled as a generation timeout and (b) aborted
+            # this function before setting the pause counter, so the finally-resume never ran and Qwen
+            # stayed down. (2026-06-17)
             _subprocess.run(
                 ["sudo", "-n", "systemctl", "stop", "nizo-llama"],
-                check=True, timeout=15,
+                check=True, timeout=90,
             )
         except _subprocess.CalledProcessError as e:
             log.error("llama: stop failed: %s", e)
             return False
+        except _subprocess.TimeoutExpired:
+            # Stop is taking a while but was issued — proceed to wait for VRAM rather than abort
+            # (aborting here would skip the resume in finally and leave Qwen stopped).
+            log.warning("llama: stop still settling after 90s; proceeding to VRAM wait")
         # Wait for VRAM to drop
         deadline = __import__("time").time() + wait_sec
         free = 0
@@ -1257,6 +1266,80 @@ async def compose(body: dict = Body(...)):
     except Exception as e:
         log.exception("compose failed")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try: os.unlink(out_path)
+        except OSError: pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Image / video generation — FLUX.1-schnell + LTX-Video, run as subprocesses in the
+# ISOLATED imagegen venv (diffusers deps kept out of this venv), wrapped in llama_paused()
+# so the full 48 GB is free. Return base64 (same envelope shape as /compose). The Java tool
+# decodes + saves into the workspace and hands the UI a /api/workspace/file reference.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GEN_PY = os.environ.get("NIZO_GEN_PYTHON", "/mnt/ai-models/envs/imagegen/bin/python")
+_GEN_DIR = os.environ.get("NIZO_GEN_DIR", os.path.dirname(os.path.abspath(__file__)))
+_IMAGE_TIMEOUT = int(os.environ.get("GEN_IMAGE_TIMEOUT", "300"))
+_VIDEO_TIMEOUT = int(os.environ.get("GEN_VIDEO_TIMEOUT", "1200"))
+
+
+def _run_gen(script: str, args: list[str], timeout: int):
+    """Run a gen script in the imagegen venv under llama_paused(). Returns CompletedProcess."""
+    cmd = [_GEN_PY, os.path.join(_GEN_DIR, script)] + args
+    with llama_paused():
+        return _subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+@app.post("/generate-image")
+async def generate_image(body: dict = Body(...)):
+    import base64
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    width = int(body.get("width", 1024)); height = int(body.get("height", 1024))
+    steps = int(body.get("steps", 4)); seed = int(body.get("seed", 0))
+    out_fd, out_path = tempfile.mkstemp(suffix=".png"); os.close(out_fd)
+    try:
+        proc = _run_gen("gen_image.py", [
+            "--prompt", prompt, "--out", out_path,
+            "--width", str(width), "--height", str(height),
+            "--steps", str(steps), "--seed", str(seed)], _IMAGE_TIMEOUT)
+        if proc.returncode != 0:
+            log.error("gen_image failed rc=%d: %s", proc.returncode, (proc.stderr or "")[-2000:])
+            raise HTTPException(status_code=500, detail="image gen failed: " + (proc.stderr or "")[-300:])
+        with open(out_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return JSONResponse({"ok": True, "mime": "image/png", "image_b64": b64})
+    except _subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="image generation timed out")
+    finally:
+        try: os.unlink(out_path)
+        except OSError: pass
+
+
+@app.post("/generate-video")
+async def generate_video(body: dict = Body(...)):
+    import base64
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    width = int(body.get("width", 704)); height = int(body.get("height", 480))
+    frames = int(body.get("frames", 97)); steps = int(body.get("steps", 40)); fps = int(body.get("fps", 24))
+    out_fd, out_path = tempfile.mkstemp(suffix=".mp4"); os.close(out_fd)
+    try:
+        proc = _run_gen("gen_video.py", [
+            "--prompt", prompt, "--out", out_path,
+            "--width", str(width), "--height", str(height),
+            "--frames", str(frames), "--steps", str(steps), "--fps", str(fps)], _VIDEO_TIMEOUT)
+        if proc.returncode != 0:
+            log.error("gen_video failed rc=%d: %s", proc.returncode, (proc.stderr or "")[-2000:])
+            raise HTTPException(status_code=500, detail="video gen failed: " + (proc.stderr or "")[-300:])
+        with open(out_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return JSONResponse({"ok": True, "mime": "video/mp4", "video_b64": b64})
+    except _subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="video generation timed out")
     finally:
         try: os.unlink(out_path)
         except OSError: pass
