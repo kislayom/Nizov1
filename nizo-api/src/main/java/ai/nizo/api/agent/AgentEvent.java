@@ -32,4 +32,12 @@ public sealed interface AgentEvent {
 
     /** A non-fatal error occurred (e.g. tool throw, model HTTP error). The loop may continue. */
     record Warning(int iteration, String message) implements AgentEvent {}
+
+    /**
+     * A scheduled reminder just fired. Emitted out-of-band (not part of a user turn) onto the
+     * dedicated reminders chat so a connected browser can alert immediately — desktop notification,
+     * chime, in-app toast, tab badge — regardless of which chat is focused. {@code prompt} is the
+     * reminder text; {@code chatId} is the reminders session it landed in.
+     */
+    record ReminderFired(int iteration, String taskId, String chatId, String prompt) implements AgentEvent {}
 }

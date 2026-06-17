@@ -249,6 +249,14 @@ public final class ChatExecution implements AutoCloseable {
         }
     }
 
+    /**
+     * Emit an out-of-band event into this chat's ring + subscribers without running a turn.
+     * Used by the scheduler to push a {@link AgentEvent.ReminderFired} onto the dedicated
+     * reminders chat so a connected browser alerts immediately. Durable (kept in the ring),
+     * so a browser that connects after the fire still backfills it via {@code ?since=}.
+     */
+    public void emitExternal(AgentEvent event) { emit(event); }
+
     /** Returned by {@link #subscribe} — call to detach. Safe to call multiple times. */
     @FunctionalInterface
     public interface Subscription extends AutoCloseable {

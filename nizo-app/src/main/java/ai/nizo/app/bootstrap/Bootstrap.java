@@ -313,18 +313,23 @@ public final class Bootstrap implements AutoCloseable {
         // Scheduler — fire reminders / recurring jobs, delivering each by running the stored prompt
         // through the agent into its chat. Daemon-ticked; schedules survive restart via the store.
         ai.nizo.agent.schedule.ScheduleRunner schedRunner = task -> {
-            ai.nizo.api.tool.UserContext.set(task.userId());
-            ai.nizo.api.tool.UserContext.setChat(task.chatId());
-            try {
-                ai.nizo.api.chat.OutgoingMessage out = agent.handle(new ai.nizo.api.chat.IncomingMessage(
-                        task.userId(), task.chatId(), task.prompt(), java.util.List.of(), "schedule"));
-                // Proactive push so a reminder reaches the user even off the web UI (no-op without a bot token).
-                if (out != null && out.text() != null && !out.text().isBlank()) {
-                    ai.nizo.channels.telegram.TelegramNotifier.push(task.chatId(), "⏰ " + out.text());
-                }
-            } finally {
-                ai.nizo.api.tool.UserContext.clear();
-            }
+            // A fired reminder goes to a DEDICATED per-user reminders thread — NOT the conversation
+            // that created it, which it used to pollute with an un-typed user/assistant pair. Routing
+            // through the normal chat-execution path (instead of agent.handle()) gives it the SSE ring
+            // + fan-out for free, so a connected browser is alerted live.
+            String remChat = "reminders-" + task.userId();
+            ai.nizo.agent.exec.ChatExecution exec = chatExecutor.getOrCreate(remChat);
+            // 1) Emit an out-of-band alert event FIRST so the browser notifies the instant it fires,
+            //    regardless of which chat is focused (the UI holds a persistent stream on this id).
+            exec.emitExternal(new ai.nizo.api.agent.AgentEvent.ReminderFired(
+                    0, task.id(), remChat, task.prompt()));
+            // 2) Run the reminder prompt as a normal turn IN the reminders thread (async on its worker;
+            //    user-scoped via the IncomingMessage). The reply persists into the reminders session.
+            exec.enqueue(new ai.nizo.api.chat.IncomingMessage(
+                    task.userId(), remChat, task.prompt(), java.util.List.of(), "schedule"));
+            // 3) Proactive out-of-band push (no-op without a bot token). Resolve the Telegram target
+            //    against the ORIGINAL task.chatId() (numeric -> bot, else TELEGRAM_NOTIFY_CHAT_ID).
+            ai.nizo.channels.telegram.TelegramNotifier.push(task.chatId(), "⏰ Reminder: " + task.prompt());
         };
         new ai.nizo.agent.schedule.SchedulerEngine(schedules, schedRunner,
                 java.time.ZoneId.systemDefault(),
