@@ -1397,7 +1397,7 @@ def _music_bed(prompt, target_ms):
             with torch.no_grad():
                 tokens = model.generate(**inputs, max_new_tokens=1000)   # ~20s
         sr = model.config.audio_encoder.sampling_rate
-        wave = tokens[0, 0].cpu().numpy()
+        wave = tokens[0, 0].cpu().numpy().astype("float32")   # MusicGen is fp16; soundfile needs fp32
         out_fd, wav = tempfile.mkstemp(suffix=".wav"); os.close(out_fd)
         sf.write(wav, wave, sr)
         seg = AudioSegment.from_file(wav)
@@ -1412,6 +1412,38 @@ def _music_bed(prompt, target_ms):
     except Exception as e:
         log.warning("music bed failed (%s) — narration only", e)
         return None
+
+
+def _synth_sfx(texts):
+    """A short clip per unique [sfx] cue → {text: AudioSegment}. Best-effort; runs inside the
+    caller's single llama_paused() window. v1 uses MusicGen (music-leaning) prompted for an effect;
+    Stable Audio Open would be higher-fidelity for true SFX (lion roar, water) — a later upgrade."""
+    out = {}
+    try:
+        from pydub import AudioSegment
+        import soundfile as sf, torch
+        model, proc = get_musicgen("small")
+        for t in texts:
+            try:
+                prompt = f"{t}, sound effect, ambient, no music, no melody, no vocals"
+                inputs = proc(text=[prompt], padding=True, return_tensors="pt")
+                with gpu_swap(model):
+                    inputs = {k: v.to("cuda") for k, v in inputs.items()}
+                    with torch.no_grad():
+                        tokens = model.generate(**inputs, max_new_tokens=130)   # ~2.5s
+                sr = model.config.audio_encoder.sampling_rate
+                wave = tokens[0, 0].cpu().numpy().astype("float32")   # MusicGen is fp16; soundfile needs fp32
+                fd, wav = tempfile.mkstemp(suffix=".wav"); os.close(fd)
+                sf.write(wav, wave, sr)
+                seg = AudioSegment.from_file(wav).fade_in(40).fade_out(200)
+                try: os.unlink(wav)
+                except OSError: pass
+                out[t] = seg
+            except Exception as e:
+                log.warning("sfx '%s' failed: %s", t, e)
+    except Exception as e:
+        log.warning("sfx engine unavailable: %s", e)
+    return out
 
 
 @app.post("/narrate-story")
@@ -1429,6 +1461,7 @@ async def narrate_story(body: dict = Body(...)):
 
     narration = AudioSegment.silent(duration=200)
     rendered = 0
+    sfx_cues = []   # (offset_ms, text) — a cue fires at the START of the segment it's tagged on
     for seg in segments:
         spk = seg.get("speaker") or "NARRATOR"
         text = (seg.get("text") or "").strip()
@@ -1440,16 +1473,26 @@ async def narrate_story(body: dict = Body(...)):
         except Exception as e:
             log.warning("segment synth failed (spk=%s voice=%s): %s", spk, voice, e)
             continue
+        sfx = (seg.get("sfx") or "").strip()
+        if sfx:
+            sfx_cues.append((len(narration), sfx))
         narration += line + AudioSegment.silent(duration=gap_ms)
         rendered += 1
 
     total_ms = len(narration)
     final = narration
-    if music_prompt:
-        with llama_paused():           # only the MusicGen swap needs the full GPU
-            bed = _music_bed(music_prompt, total_ms)
+    # ONE llama_paused() window covers the music bed AND every SFX clip — never one pause per cue
+    # (each pause stops/starts llama). TTS already happened outside the pause (XTTS on CUDA / Kokoro CPU).
+    if music_prompt or sfx_cues:
+        with llama_paused():
+            bed = _music_bed(music_prompt, total_ms) if music_prompt else None
+            clips = _synth_sfx({t for _, t in sfx_cues}) if sfx_cues else {}
         if bed is not None:
-            final = narration.overlay(bed - 18)   # bed ~18 dB under the voices
+            final = final.overlay(bed - 18)            # bed ~18 dB under the voices
+        for off, t in sfx_cues:
+            clip = clips.get(t)
+            if clip is not None:
+                final = final.overlay(clip - 6, position=off)   # effect ~6 dB under at its cue
 
     out_fd, out_path = tempfile.mkstemp(suffix=".mp3"); os.close(out_fd)
     try:

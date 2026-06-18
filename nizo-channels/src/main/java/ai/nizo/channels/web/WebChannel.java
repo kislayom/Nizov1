@@ -128,6 +128,8 @@ public final class WebChannel implements AutoCloseable {
         server.createContext("/api/music/compose",    this::handleMusicCompose);    // text-to-music proxy → sidecar
         server.createContext("/api/music/compose-async", this::handleMusicComposeAsync); // queues job, returns jobId
         server.createContext("/api/music/jobs",       this::handleMusicJobs);       // list jobs OR get/delete by id
+        server.createContext("/api/image",            this::handleImageGenerate);   // text->image proxy → sidecar /generate-image
+        server.createContext("/api/video",            this::handleVideoGenerate);   // text->video proxy → sidecar /generate-video
         server.createContext("/api/stock/history",    this::handleStockHistory);    // GET → list of past completed reports (single-user for now)
         server.createContext("/api/stock/report",     this::handleStockReport);     // GET /api/stock/report/{chatId} → full record; DELETE removes
         server.createContext("/api/stock/rerun-stage", this::handleStockRerunStage); // POST → re-run a single sub-skill (fundamentals, news, …) and patch the master report
@@ -1124,6 +1126,41 @@ public final class WebChannel implements AutoCloseable {
             try (OutputStream os = ex.getResponseBody()) { os.write(r.body()); }
         } catch (Exception e) {
             LOG.warn("/api/music/jobs proxy failed", e);
+            respondJson(ex, 502, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+        }
+    }
+
+    /** POST /api/image — proxy to sidecar /generate-image (returns {ok, image_b64} JSON). */
+    private void handleImageGenerate(HttpExchange ex) throws IOException {
+        proxyGen(ex, "/generate-image", java.time.Duration.ofMinutes(6));
+    }
+
+    /** POST /api/video — proxy to sidecar /generate-video (returns {ok, video_b64} JSON). */
+    private void handleVideoGenerate(HttpExchange ex) throws IOException {
+        proxyGen(ex, "/generate-video", java.time.Duration.ofMinutes(25));
+    }
+
+    /** Shared forwarder for the media-gen proxies — POST JSON body to the sidecar, relay the JSON
+     *  envelope verbatim. Both sidecar endpoints pause Qwen + run on the GPU, hence the long timeout;
+     *  the virtual-thread server means the long hold doesn't block other requests. */
+    private void proxyGen(HttpExchange ex, String sidecarPath, java.time.Duration timeout) throws IOException {
+        if (rejectIfUnauthenticated(ex)) return;
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
+        byte[] body;
+        try (InputStream is = ex.getRequestBody()) { body = is.readAllBytes(); }
+        try {
+            java.net.http.HttpResponse<byte[]> r = VOICE_HTTP.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(VOICE_BASE + sidecarPath))
+                            .timeout(timeout)
+                            .header("Content-Type", "application/json")
+                            .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(body))
+                            .build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(r.statusCode(), r.body().length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(r.body()); }
+        } catch (Exception e) {
+            LOG.warn("{} proxy failed", sidecarPath, e);
             respondJson(ex, 502, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
         }
     }
