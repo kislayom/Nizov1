@@ -397,8 +397,13 @@ public final class WebChannel implements AutoCloseable {
         String contentType = guessContentType(filename);
 
         ex.getResponseHeaders().add("Content-Type", contentType);
+        // Media (image/audio/video) is served INLINE so <img>/<audio>/<video> can render/play it;
+        // everything else keeps attachment so the inspector's download button still saves a file.
+        boolean inline = contentType.startsWith("image/") || contentType.startsWith("audio/")
+                || contentType.startsWith("video/");
         ex.getResponseHeaders().add("Content-Disposition",
-                "attachment; filename=\"" + filename.replace("\"", "") + "\"");
+                (inline ? "inline" : "attachment") + "; filename=\"" + filename.replace("\"", "") + "\"");
+        ex.getResponseHeaders().add("Accept-Ranges", "bytes");
         ex.getResponseHeaders().add("Cache-Control", "no-store");
         ex.sendResponseHeaders(200, size);
         try (OutputStream os = ex.getResponseBody()) {
@@ -423,6 +428,14 @@ public final class WebChannel implements AutoCloseable {
             case "gif"                  -> "image/gif";
             case "webp"                 -> "image/webp";
             case "svg"                  -> "image/svg+xml";
+            case "mp3"                  -> "audio/mpeg";
+            case "wav"                  -> "audio/wav";
+            case "ogg", "oga"           -> "audio/ogg";
+            case "m4a"                  -> "audio/mp4";
+            case "flac"                 -> "audio/flac";
+            case "mp4"                  -> "video/mp4";
+            case "webm"                 -> "video/webm";
+            case "mov"                  -> "video/quicktime";
             case "pdf"                  -> "application/pdf";
             case "zip"                  -> "application/zip";
             case "tar"                  -> "application/x-tar";
