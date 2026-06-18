@@ -1574,6 +1574,41 @@ async def narrate_story(body: dict = Body(...)):
         except OSError: pass
 
 
+@app.post("/narrate-story-async")
+async def narrate_story_async(body: dict = Body(...)):
+    """Render a long story as two halves in a background job. Part A is rendered first and exposed
+    as soon as it's ready (status=partA_done) so the child can start listening while Part B renders;
+    the halves run SEQUENTIALLY (one llama_paused GPU window at a time). Poll GET /jobs/{id}."""
+    import time as _t
+    job_id = _uuid.uuid4().hex[:12]
+    segments = body.get("segments") or []
+    mid = max(1, (len(segments) + 1) // 2)
+    base = {k: v for k, v in body.items() if k != "segments"}
+    partA_body = {**base, "segments": segments[:mid]}
+    partB_body = {**base, "segments": segments[mid:]}
+    _write_job(job_id, status="queued", kind="story", createdAt=int(_t.time()), errorMessage=None)
+
+    def _runner():
+        import asyncio, json as _j
+        try:
+            _write_job(job_id, status="running")
+            ra = asyncio.run(narrate_story(body=partA_body))
+            envA = _j.loads(ra.body.decode("utf-8"))
+            _write_job(job_id, status="partA_done", partA=envA)
+            if partB_body["segments"]:
+                rb = asyncio.run(narrate_story(body=partB_body))
+                envB = _j.loads(rb.body.decode("utf-8"))
+                _write_job(job_id, status="done", partB=envB)
+            else:
+                _write_job(job_id, status="done")
+        except Exception as e:
+            log.exception("narrate-story-async failed")
+            _write_job(job_id, status="failed", errorMessage=str(e))
+
+    _threading.Thread(target=_runner, name=f"story-job-{job_id}", daemon=True).start()
+    return {"jobId": job_id, "status": "queued"}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
