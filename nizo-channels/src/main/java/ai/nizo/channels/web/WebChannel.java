@@ -372,7 +372,8 @@ public final class WebChannel implements AutoCloseable {
     private void handleWorkspaceFile(HttpExchange ex) throws IOException {
         if (rejectIfUnauthenticated(ex)) return;
         if (ctx == null) { respondJson(ex, 501, "{\"error\":\"context not wired\"}"); return; }
-        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
+        boolean head = "HEAD".equalsIgnoreCase(ex.getRequestMethod());
+        if (!head && !"GET".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
 
         String relPath = "";
         String q = ex.getRequestURI().getRawQuery();
@@ -408,6 +409,12 @@ public final class WebChannel implements AutoCloseable {
                 (inline ? "inline" : "attachment") + "; filename=\"" + filename.replace("\"", "") + "\"");
         ex.getResponseHeaders().add("Accept-Ranges", "bytes");
         ex.getResponseHeaders().add("Cache-Control", "no-store");
+        if (head) {   // existence/metadata check (used by the bedtime-story Part 2 poll) — no body
+            ex.getResponseHeaders().add("Content-Length", String.valueOf(size));
+            ex.sendResponseHeaders(200, -1);
+            ex.close();
+            return;
+        }
         ex.sendResponseHeaders(200, size);
         try (OutputStream os = ex.getResponseBody()) {
             Files.copy(target, os);
