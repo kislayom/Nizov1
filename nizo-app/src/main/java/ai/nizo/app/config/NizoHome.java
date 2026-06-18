@@ -39,6 +39,7 @@ public final class NizoHome {
         ensure(this.root);
         ensure(workspace());
         ensure(skillsDir());
+        ensure(voicesDir());
         ensure(logsDir());
         LOG.info("NIZO_HOME = {}", this.root);
     }
@@ -57,6 +58,7 @@ public final class NizoHome {
     public Path stockReportsDb() { return root.resolve("stock_reports.db"); }
     public Path workspace()    { return root.resolve("workspace"); }
     public Path skillsDir()    { return root.resolve("skills"); }
+    public Path voicesDir()    { return root.resolve("voices"); }   // stored XTTS clone reference wavs
     public Path logsDir()      { return root.resolve("logs"); }
     public Path configFile()   { return root.resolve("config.yaml"); }
     /** Claude-Desktop / OpenClaw-compatible MCP server registry. */

@@ -392,6 +392,17 @@ def get_xtts():
         # Coqui-TTS doesn't accept --no-prompt for XTTS-v2 model agreement check.
         # Setting the env var makes it auto-accept the CPML license.
         os.environ.setdefault("COQUI_TOS_AGREED", "1")
+        # transformers 5.x removed transformers.pytorch_utils.isin_mps_friendly, which Coqui-TTS's
+        # tortoise/xtts layers still import → XTTS (and thus voice cloning) fails to load. Shim it
+        # back (it's just torch.isin) before importing TTS, rather than pinning transformers down
+        # (which would break MusicGen/Whisper in this same venv).
+        try:
+            import transformers.pytorch_utils as _pu
+            if not hasattr(_pu, "isin_mps_friendly"):
+                import torch as _t
+                _pu.isin_mps_friendly = lambda elements, test_elements: _t.isin(elements, test_elements)
+        except Exception as _e:
+            log.warning("isin_mps_friendly shim failed: %s", _e)
         from TTS.api import TTS
         model_name = os.environ.get("XTTS_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")
         log.info("loading XTTS %s", model_name)
@@ -1343,6 +1354,62 @@ async def generate_video(body: dict = Body(...)):
     finally:
         try: os.unlink(out_path)
         except OSError: pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice-sample storage for XTTS cloning — one reference wav per user, used as the cloned
+# narrator voice for bedtime stories (and any speaker_wav TTS).
+# ─────────────────────────────────────────────────────────────────────────────
+
+VOICES_DIR = Path(os.environ.get("NIZO_VOICES_DIR", os.path.expanduser("~/.nizo/voices")))
+VOICES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _sanitize_user(uid):
+    import re as _re
+    uid = (uid or "web-user").strip()
+    return uid if _re.fullmatch(r"[A-Za-z0-9_-]{1,64}", uid) else "web-user"
+
+
+@app.post("/voice-sample")
+async def voice_sample(audio: UploadFile = File(...), userId: str = Form("web-user")):
+    """Store a user's voice sample as VOICES_DIR/<userId>.wav (16-bit mono). Decodes whatever the
+    browser recorded (webm/opus) via ffmpeg. Rejects clips under ~3s (XTTS needs a clean reference)."""
+    import subprocess as _sp
+    data = await audio.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty upload")
+    uid = _sanitize_user(userId)
+    in_fd, in_path = tempfile.mkstemp(suffix=".bin"); os.close(in_fd)
+    with open(in_path, "wb") as f:
+        f.write(data)
+    out_path = str(VOICES_DIR / (uid + ".wav"))
+    try:
+        _sp.run(["ffmpeg", "-y", "-i", in_path, "-ac", "1", "-ar", "22050", out_path],
+                capture_output=True, timeout=30, check=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"could not decode audio: {e}")
+    finally:
+        try: os.unlink(in_path)
+        except OSError: pass
+    try:
+        import soundfile as sf
+        info = sf.info(out_path); dur = info.frames / float(info.samplerate)
+    except Exception:
+        dur = 0.0
+    if dur < 3.0:
+        try: os.unlink(out_path)
+        except OSError: pass
+        raise HTTPException(status_code=400, detail="sample too short — record at least ~6 seconds")
+    log.info("voice-sample stored for %s (%.1fs)", uid, dur)
+    return JSONResponse({"ok": True, "userId": uid, "path": out_path, "durationSec": round(dur, 1)})
+
+
+@app.get("/voice-sample")
+async def voice_sample_get(userId: str = "web-user"):
+    uid = _sanitize_user(userId)
+    p = VOICES_DIR / (uid + ".wav")
+    return JSONResponse({"exists": p.exists(), "path": str(p) if p.exists() else None})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

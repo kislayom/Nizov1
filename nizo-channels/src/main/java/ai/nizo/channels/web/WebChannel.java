@@ -122,6 +122,7 @@ public final class WebChannel implements AutoCloseable {
         server.createContext("/api/chat/state",    this::handleChatState);
         server.createContext("/api/usage",         this::handleUsage);          // tool/skill usage telemetry
         server.createContext("/api/voice/transcribe", this::handleVoiceTranscribe); // STT proxy → sidecar
+        server.createContext("/api/voice/sample",     this::handleVoiceSample);     // store/query the XTTS clone reference wav
         server.createContext("/api/voice/speak",      this::handleVoiceSpeak);      // TTS proxy → sidecar
         server.createContext("/api/voice/voices",     this::handleVoiceVoices);     // sidecar /voices (speakers + langs)
         server.createContext("/api/voice/health",     this::handleVoiceHealth);     // sidecar /health
@@ -1009,6 +1010,43 @@ public final class WebChannel implements AutoCloseable {
             respondJson(ex, r.statusCode(), r.body());
         } catch (Exception e) {
             LOG.warn("/api/voice/transcribe proxy failed", e);
+            respondJson(ex, 502, "{\"error\":\"sidecar error: " + escape(e.getMessage()) + "\"}");
+        }
+    }
+
+    /** Voice clone reference. POST multipart {audio,userId} stores it; GET ?userId=… checks existence. */
+    private void handleVoiceSample(HttpExchange ex) throws IOException {
+        if (rejectIfUnauthenticated(ex)) return;
+        String method = ex.getRequestMethod().toUpperCase();
+        try {
+            if (method.equals("GET")) {
+                String url = VOICE_BASE + "/voice-sample";
+                String qs = ex.getRequestURI().getQuery();
+                if (qs != null && !qs.isEmpty()) url += "?" + qs;
+                java.net.http.HttpResponse<String> r = VOICE_HTTP.send(
+                        java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+                                .timeout(java.time.Duration.ofSeconds(10)).GET().build(),
+                        java.net.http.HttpResponse.BodyHandlers.ofString());
+                respondJson(ex, r.statusCode(), r.body());
+                return;
+            }
+            if (!method.equals("POST")) { respondText(ex, 405, "method not allowed"); return; }
+            String contentType = ex.getRequestHeaders().getFirst("Content-Type");
+            if (contentType == null || !contentType.toLowerCase().contains("multipart/")) {
+                respondJson(ex, 400, "{\"error\":\"multipart/form-data required\"}"); return;
+            }
+            byte[] body;
+            try (InputStream is = ex.getRequestBody()) { body = is.readAllBytes(); }
+            java.net.http.HttpResponse<String> r = VOICE_HTTP.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(VOICE_BASE + "/voice-sample"))
+                            .timeout(java.time.Duration.ofSeconds(60))
+                            .header("Content-Type", contentType)
+                            .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(body))
+                            .build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            respondJson(ex, r.statusCode(), r.body());
+        } catch (Exception e) {
+            LOG.warn("/api/voice/sample proxy failed", e);
             respondJson(ex, 502, "{\"error\":\"sidecar error: " + escape(e.getMessage()) + "\"}");
         }
     }

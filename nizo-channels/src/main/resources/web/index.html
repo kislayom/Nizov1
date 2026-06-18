@@ -3308,6 +3308,14 @@ window._loadPdfLibs = function () {
         <label for="musicPrompt">Describe the music</label>
         <textarea id="musicPrompt" placeholder="lo-fi study beat with soft jazzy piano…"></textarea>
       </div>
+      <div class="music-prompt-card" id="narratorVoiceCard">
+        <label>🌙 Narrator voice — for bedtime stories</label>
+        <div style="display:flex; align-items:center; gap:12px; margin-top:8px; flex-wrap:wrap;">
+          <button type="button" class="btn" id="voiceSampleBtn">🎙️ Record narrator voice</button>
+          <span id="voiceSampleStatus" style="color:var(--md-on-surface-variant); font-size:13px;">checking…</span>
+        </div>
+        <div style="color:var(--md-on-surface-variant); font-size:12px; margin-top:6px;">Read ~15–30s calmly; your stories will be told in this voice.</div>
+      </div>
       <div class="music-presets" id="musicPresets"></div>
       <div class="music-controls-card">
         <div class="control-row" id="musicDurationRow">
@@ -7582,6 +7590,45 @@ function wireMusicStudio() {
   const errorEl    = document.getElementById('musicError');
   const libraryEl  = document.getElementById('musicLibrary');
   if (!promptEl || !composeBtn) return;          // not on this page
+
+  // ── Narrator voice clone capture: record a sample → POST /api/voice/sample (stored as the
+  //    XTTS reference wav; bedtime_story narrates in this cloned voice when present). ──
+  const vBtn = document.getElementById('voiceSampleBtn');
+  const vStatus = document.getElementById('voiceSampleStatus');
+  if (vBtn && vStatus) {
+    fetch('/api/voice/sample?userId=' + encodeURIComponent(nizoUserId()))
+      .then(r => r.json()).then(j => { vStatus.textContent = j.exists ? '✓ saved' : 'not recorded yet'; })
+      .catch(() => { vStatus.textContent = ''; });
+    let vRec = null, vChunks = [], vStream = null, vTimer = null;
+    vBtn.addEventListener('click', async () => {
+      if (vRec && vRec.state === 'recording') { vRec.stop(); return; }
+      try {
+        vStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        vChunks = [];
+        vRec = new MediaRecorder(vStream);
+        vRec.ondataavailable = e => { if (e.data.size) vChunks.push(e.data); };
+        vRec.onstop = async () => {
+          clearTimeout(vTimer);
+          if (vStream) vStream.getTracks().forEach(t => t.stop());
+          vBtn.textContent = '🎙️ Record narrator voice';
+          const fd = new FormData();
+          fd.append('audio', new Blob(vChunks, { type: 'audio/webm' }), 'sample.webm');
+          fd.append('userId', nizoUserId());
+          vStatus.textContent = 'saving…';
+          try {
+            const r = await fetch('/api/voice/sample', { method: 'POST', body: fd });
+            const j = await r.json();
+            vStatus.textContent = j.ok ? ('✓ saved (' + (j.durationSec || '?') + 's)')
+                                       : ('⚠ ' + (j.detail || j.error || 'failed'));
+          } catch (e) { vStatus.textContent = '⚠ ' + e.message; }
+        };
+        vRec.start();
+        vBtn.textContent = '⏹ Stop';
+        vStatus.textContent = 'recording — read calmly for 15–30s…';
+        vTimer = setTimeout(() => { if (vRec && vRec.state === 'recording') vRec.stop(); }, 30000);
+      } catch (e) { vStatus.textContent = '⚠ mic blocked: ' + e.message; }
+    });
+  }
 
   // Presets
   presetsEl.innerHTML = '';

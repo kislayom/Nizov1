@@ -60,16 +60,17 @@ public final class BedtimeStoryTool implements Tool {
     private final LlmClient llm;
     private final String model;
     private final Path workspace;
+    private final Path voicesDir;
     private final String sidecarUrl;
     private final HttpClient http = HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(10)).build();
 
-    public BedtimeStoryTool(LlmClient llm, String model, Path workspace) {
-        this(llm, model, workspace, System.getenv().getOrDefault("NIZO_VOICE_URL", "http://127.0.0.1:7780"));
+    public BedtimeStoryTool(LlmClient llm, String model, Path workspace, Path voicesDir) {
+        this(llm, model, workspace, voicesDir, System.getenv().getOrDefault("NIZO_VOICE_URL", "http://127.0.0.1:7780"));
     }
 
-    public BedtimeStoryTool(LlmClient llm, String model, Path workspace, String sidecarUrl) {
-        this.llm = llm; this.model = model; this.workspace = workspace;
+    public BedtimeStoryTool(LlmClient llm, String model, Path workspace, Path voicesDir, String sidecarUrl) {
+        this.llm = llm; this.model = model; this.workspace = workspace; this.voicesDir = voicesDir;
         this.sidecarUrl = sidecarUrl.endsWith("/") ? sidecarUrl.substring(0, sidecarUrl.length() - 1) : sidecarUrl;
     }
 
@@ -135,6 +136,20 @@ public final class BedtimeStoryTool implements Tool {
             return ToolResult.error("could not produce a valid story script (LLM output was not parseable JSON).");
         }
         String title = script.path("title").asText("A Bedtime Story");
+
+        // Personalised narrator: if this user recorded a voice sample, drive the cloned narrator
+        // (NARRATOR is already cast as "clone" in the palette). Same-host path → the sidecar reads it.
+        com.fasterxml.jackson.databind.node.ObjectNode scriptObj =
+                script instanceof com.fasterxml.jackson.databind.node.ObjectNode o
+                        ? o : (com.fasterxml.jackson.databind.node.ObjectNode) MAPPER.valueToTree(script);
+        String uid = ai.nizo.api.tool.UserContext.current();
+        String safeUid = (uid == null || uid.isBlank() ? "web-user" : uid).replaceAll("[^A-Za-z0-9_-]", "");
+        Path clone = voicesDir.resolve(safeUid + ".wav");
+        if (Files.exists(clone)) {
+            scriptObj.put("voiceSampleWav", clone.toString());
+            LOG.info("bedtime_story: cloned narrator voice for {}", safeUid);
+        }
+        script = scriptObj;
 
         // ── 2. Render via the sidecar ──
         HttpResponse<String> r;
