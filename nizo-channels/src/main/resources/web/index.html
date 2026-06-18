@@ -5366,6 +5366,32 @@ function renderMarkdown(src) {
       i++; continue;
     }
 
+    // Bedtime-story Part 2 placeholder: [STORY-PART-2 file=gen/story-…-b.mp3]. Part 1 already plays
+    // (rendered above); Part 2 is still rendering in the background, so poll for its file and swap in
+    // a player when it lands (no job endpoint needed — file existence is the ready signal).
+    const partM = /^\[STORY-PART-2 file=(gen\/[A-Za-z0-9._\/-]+)\]\s*$/.exec(line.trim());
+    if (partM) {
+      flushPara(para); para = [];
+      const purl = '/api/workspace/file?path=' + partM[1];
+      const ph = el('div', { class: 'gen-audio' });
+      ph.appendChild(el('div', { class: 'gen-audio-title' }, '🌙 Part 2 — still being narrated…'));
+      root.appendChild(ph);
+      let tries = 0;
+      const timer = setInterval(() => {
+        tries++;
+        fetch(purl, { method: 'HEAD' }).then(r => {
+          if (r.ok) {
+            clearInterval(timer);
+            ph.innerHTML = '';
+            ph.appendChild(el('div', { class: 'gen-audio-title' }, '🎧 Part 2'));
+            ph.appendChild(el('audio', { class: 'gen-media', src: purl, controls: '', preload: 'metadata' }));
+          }
+        }).catch(() => {});
+        if (tries > 230) clearInterval(timer);   // give up after ~15 min
+      }, 4000);
+      i++; continue;
+    }
+
     // Fenced code block: ```lang ... ```
     // Allow hyphens in the language identifier so multi-word fence types like
     // ```chart-financials, ```chart-analyst, ```chart-tech are recognized. The original

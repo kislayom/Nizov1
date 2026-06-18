@@ -151,7 +151,13 @@ public final class BedtimeStoryTool implements Tool {
         }
         script = scriptObj;
 
-        // ── 2. Render via the sidecar ──
+        // Long stories (5-6 min) are too long to render synchronously — split into two halves as an
+        // async job: Part 1 returns as soon as it's ready and plays while Part 2 finishes.
+        if (minutes > 3.0 || script.path("segments").size() > 8) {
+            return renderAsyncSplit(title, script);
+        }
+
+        // ── 2. Render via the sidecar (short story, synchronous) ──
         HttpResponse<String> r;
         try {
             r = http.send(HttpRequest.newBuilder(URI.create(sidecarUrl + "/narrate-story"))
@@ -180,10 +186,83 @@ public final class BedtimeStoryTool implements Tool {
         int segs = out.path("segments").asInt(0);
         String url = "/api/workspace/file?path=gen/" + fname;
         LOG.info("bedtime_story '{}' -> {} ({} segments, {}s, {} bytes)", title, fname, segs, dur, mp3.length);
-        return ToolResult.ok("Story ready: **" + title + "** (" + segs + " parts, ~"
-                + Math.round(dur) + "s)\n\n"
-                + "![" + title.replace("]", " ") + "](" + url + ")\n\n"
-                + "(Include the line above verbatim so the child can press play.)");
+        // Verbatim render — the music-bed gen pauses Qwen, so don't make a final synthesis call.
+        return ToolResult.ok(DeterministicStockOrchestratorTool.VERBATIM_MARKER
+                + "Here's the story 🌙\n\n**" + title + "** (~" + Math.round(dur) + "s, "
+                + segs + " parts).\n\n"
+                + "![" + title.replace("]", " ") + "](" + url + ")\n\nPress play. Sweet dreams ✨");
+    }
+
+    /** Two-part async render: kick off the job, return Part 1 as soon as it's ready, and write Part 2
+     *  on a background thread when the job finishes. The chat shows Part 1 immediately + a Part 2
+     *  placeholder that the UI swaps for a player once {@code gen/story-<id>-b.mp3} appears. */
+    private ToolResult renderAsyncSplit(String title, JsonNode script) throws Exception {
+        HttpResponse<String> r;
+        try {
+            r = http.send(HttpRequest.newBuilder(URI.create(sidecarUrl + "/narrate-story-async"))
+                    .timeout(Duration.ofSeconds(15)).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(script), StandardCharsets.UTF_8))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+        } catch (java.net.ConnectException e) {
+            return ToolResult.error("voice sidecar not reachable — is nizo-voice running?");
+        }
+        if (r.statusCode() / 100 != 2) return ToolResult.error("story render failed to start: " + r.body());
+        String jobId = MAPPER.readTree(r.body()).path("jobId").asText("");
+        if (jobId.isEmpty()) return ToolResult.error("renderer returned no jobId");
+
+        Path genDir = workspace.resolve("gen");
+        Files.createDirectories(genDir);
+        String id = UUID.randomUUID().toString().substring(0, 8);
+        final String aName = "story-" + id + "-a.mp3";
+        final String bName = "story-" + id + "-b.mp3";
+
+        JsonNode job = pollJob(jobId, "partA_done", 300);   // wait up to 5 min for Part 1
+        if (job == null) return ToolResult.error("Part 1 took too long to render — try a shorter story.");
+        byte[] aMp3 = Base64.getDecoder().decode(job.path("partA").path("audio_b64").asText(""));
+        if (aMp3.length == 0) return ToolResult.error("Part 1 produced no audio");
+        Files.write(genDir.resolve(aName), aMp3);
+
+        // Background: poll to completion, then write Part 2 so the UI's file-poll can pick it up.
+        TIMEOUT_EXEC.submit(() -> {
+            try {
+                JsonNode done = pollJob(jobId, "done", 900);
+                if (done != null && done.has("partB")) {
+                    byte[] bMp3 = Base64.getDecoder().decode(done.path("partB").path("audio_b64").asText(""));
+                    if (bMp3.length > 0) {
+                        Files.write(genDir.resolve(bName), bMp3);
+                        LOG.info("bedtime_story Part 2 written: {}", bName);
+                    }
+                }
+            } catch (Exception e) { LOG.warn("bedtime_story Part 2 failed: {}", e.toString()); }
+        });
+
+        String alt = title.replace("]", " ");
+        LOG.info("bedtime_story '{}' async two-part: part1={} part2={}", title, aName, bName);
+        // Render verbatim (no final LLM call): the background Part 2 render pauses Qwen, so an extra
+        // synthesis call here would race a paused model. The tool result IS the reply.
+        return ToolResult.ok(DeterministicStockOrchestratorTool.VERBATIM_MARKER
+                + "Here's the story 🌙\n\n**" + title + "** — narrated in two parts, in your voice.\n\n"
+                + "![" + alt + " · Part 1](/api/workspace/file?path=gen/" + aName + ")\n\n"
+                + "[STORY-PART-2 file=gen/" + bName + "]\n\nPart 1 plays now; Part 2 appears when it finishes rendering. Sweet dreams ✨");
+    }
+
+    /** Poll GET /jobs/{id} until status is {@code untilStatus} or "done" (or "failed"→null). */
+    private JsonNode pollJob(String jobId, String untilStatus, int maxSeconds) {
+        long deadline = System.currentTimeMillis() + maxSeconds * 1000L;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(sidecarUrl + "/jobs/" + jobId))
+                        .timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString());
+                if (r.statusCode() / 100 == 2) {
+                    JsonNode j = MAPPER.readTree(r.body());
+                    String st = j.path("status").asText("");
+                    if ("failed".equals(st)) return null;
+                    if ("done".equals(st) || untilStatus.equals(st)) return j;
+                }
+            } catch (Exception ignore) { /* transient — keep polling */ }
+            try { Thread.sleep(4000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+        }
+        return null;
     }
 
     /** Pull the first balanced {...} JSON object out of an LLM reply (tolerates fences/prose). */
