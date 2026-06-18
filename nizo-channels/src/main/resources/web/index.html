@@ -5366,15 +5366,18 @@ function renderMarkdown(src) {
       i++; continue;
     }
 
-    // Bedtime-story Part 2 placeholder: [STORY-PART-2 file=gen/story-…-b.mp3]. Part 1 already plays
-    // (rendered above); Part 2 is still rendering in the background, so poll for its file and swap in
-    // a player when it lands (no job endpoint needed — file existence is the ready signal).
-    const partM = /^\[STORY-PART-2 file=(gen\/[A-Za-z0-9._\/-]+)\]\s*$/.exec(line.trim());
-    if (partM) {
+    // Bedtime-story pending placeholder: [STORY-PENDING title=… file=gen/story-….mp3]. The combined
+    // track is still rendering in the background, so poll for its file and swap in a single player when
+    // it lands (file existence is the ready signal — the HEAD route reports it without sending the body).
+    const pendM = /^\[STORY-PENDING(?: title=([^\]]*?))? file=(gen\/[A-Za-z0-9._\/-]+)\]\s*$/.exec(line.trim());
+    if (pendM) {
       flushPara(para); para = [];
-      const purl = '/api/workspace/file?path=' + partM[1];
+      const ptitle = (pendM[1] || 'Your story').trim();
+      const purl = '/api/workspace/file?path=' + pendM[2];
       const ph = el('div', { class: 'gen-audio' });
-      ph.appendChild(el('div', { class: 'gen-audio-title' }, '🌙 Part 2 — still being narrated…'));
+      ph.appendChild(el('div', { class: 'gen-audio-title' }, '🌙 ' + ptitle + ' — still being narrated…'));
+      const spin = el('div', { class: 'gen-audio-sub' }, 'Weaving voices, music and sound effects together…');
+      ph.appendChild(spin);
       root.appendChild(ph);
       let tries = 0;
       const timer = setInterval(() => {
@@ -5383,11 +5386,11 @@ function renderMarkdown(src) {
           if (r.ok) {
             clearInterval(timer);
             ph.innerHTML = '';
-            ph.appendChild(el('div', { class: 'gen-audio-title' }, '🎧 Part 2'));
+            ph.appendChild(el('div', { class: 'gen-audio-title' }, '🎧 ' + ptitle));
             ph.appendChild(el('audio', { class: 'gen-media', src: purl, controls: '', preload: 'metadata' }));
           }
         }).catch(() => {});
-        if (tries > 230) clearInterval(timer);   // give up after ~15 min
+        if (tries > 300) clearInterval(timer);   // give up after ~20 min
       }, 4000);
       i++; continue;
     }

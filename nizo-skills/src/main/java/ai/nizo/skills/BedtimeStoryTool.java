@@ -193,9 +193,10 @@ public final class BedtimeStoryTool implements Tool {
                 + "![" + title.replace("]", " ") + "](" + url + ")\n\nPress play. Sweet dreams ✨");
     }
 
-    /** Two-part async render: kick off the job, return Part 1 as soon as it's ready, and write Part 2
-     *  on a background thread when the job finishes. The chat shows Part 1 immediately + a Part 2
-     *  placeholder that the UI swaps for a player once {@code gen/story-<id>-b.mp3} appears. */
+    /** Long-story async render: kick off the job (rendered in two halves internally, then stitched
+     *  into ONE combined track), return immediately with a pending placeholder, and write the single
+     *  combined mp3 on a background thread when the job finishes. The UI swaps the placeholder for one
+     *  player once {@code gen/story-<id>.mp3} appears. */
     private ToolResult renderAsyncSplit(String title, JsonNode script) throws Exception {
         HttpResponse<String> r;
         try {
@@ -213,37 +214,35 @@ public final class BedtimeStoryTool implements Tool {
         Path genDir = workspace.resolve("gen");
         Files.createDirectories(genDir);
         String id = UUID.randomUUID().toString().substring(0, 8);
-        final String aName = "story-" + id + "-a.mp3";
-        final String bName = "story-" + id + "-b.mp3";
+        final String fname = "story-" + id + ".mp3";
 
-        JsonNode job = pollJob(jobId, "partA_done", 300);   // wait up to 5 min for Part 1
-        if (job == null) return ToolResult.error("Part 1 took too long to render — try a shorter story.");
-        byte[] aMp3 = Base64.getDecoder().decode(job.path("partA").path("audio_b64").asText(""));
-        if (aMp3.length == 0) return ToolResult.error("Part 1 produced no audio");
-        Files.write(genDir.resolve(aName), aMp3);
-
-        // Background: poll to completion, then write Part 2 so the UI's file-poll can pick it up.
+        // Background: poll to completion, then write the ONE combined mp3 so the UI's file-poll picks it up.
         TIMEOUT_EXEC.submit(() -> {
             try {
-                JsonNode done = pollJob(jobId, "done", 900);
-                if (done != null && done.has("partB")) {
-                    byte[] bMp3 = Base64.getDecoder().decode(done.path("partB").path("audio_b64").asText(""));
-                    if (bMp3.length > 0) {
-                        Files.write(genDir.resolve(bName), bMp3);
-                        LOG.info("bedtime_story Part 2 written: {}", bName);
+                JsonNode done = pollJob(jobId, "done", 1200);
+                if (done != null && "done".equals(done.path("status").asText())) {
+                    byte[] mp3 = Base64.getDecoder().decode(done.path("audio_b64").asText(""));
+                    if (mp3.length > 0) {
+                        Files.write(genDir.resolve(fname), mp3);
+                        LOG.info("bedtime_story combined audio written: {} ({} bytes)", fname, mp3.length);
+                    } else {
+                        LOG.warn("bedtime_story job {} done but produced no audio", jobId);
                     }
+                } else {
+                    LOG.warn("bedtime_story job {} did not complete: {}", jobId,
+                            done == null ? "timeout" : done.path("errorMessage").asText());
                 }
-            } catch (Exception e) { LOG.warn("bedtime_story Part 2 failed: {}", e.toString()); }
+            } catch (Exception e) { LOG.warn("bedtime_story combined render failed: {}", e.toString()); }
         });
 
         String alt = title.replace("]", " ");
-        LOG.info("bedtime_story '{}' async two-part: part1={} part2={}", title, aName, bName);
-        // Render verbatim (no final LLM call): the background Part 2 render pauses Qwen, so an extra
-        // synthesis call here would race a paused model. The tool result IS the reply.
+        LOG.info("bedtime_story '{}' async (combined): {}", title, fname);
+        // Render verbatim (no final LLM call): the background render pauses Qwen for the music + SFX,
+        // so an extra synthesis call here would race a paused model. The tool result IS the reply.
         return ToolResult.ok(DeterministicStockOrchestratorTool.VERBATIM_MARKER
-                + "Here's the story 🌙\n\n**" + title + "** — narrated in two parts, in your voice.\n\n"
-                + "![" + alt + " · Part 1](/api/workspace/file?path=gen/" + aName + ")\n\n"
-                + "[STORY-PART-2 file=gen/" + bName + "]\n\nPart 1 plays now; Part 2 appears when it finishes rendering. Sweet dreams ✨");
+                + "Here's the story 🌙\n\n**" + title + "** — narrating it in your voice now.\n\n"
+                + "[STORY-PENDING title=" + alt + " file=gen/" + fname + "]\n\n"
+                + "It's a longer one, so give it a few minutes — the finished story will appear right here. Sweet dreams ✨");
     }
 
     /** Poll GET /jobs/{id} until status is {@code untilStatus} or "done" (or "failed"→null). */

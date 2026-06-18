@@ -1481,10 +1481,9 @@ def _music_bed(prompt, target_ms):
         return None
 
 
-def _synth_sfx(texts):
-    """A short clip per unique [sfx] cue → {text: AudioSegment}. Best-effort; runs inside the
-    caller's single llama_paused() window. v1 uses MusicGen (music-leaning) prompted for an effect;
-    Stable Audio Open would be higher-fidelity for true SFX (lion roar, water) — a later upgrade."""
+def _synth_sfx_musicgen(texts):
+    """Fallback only: MusicGen prompted for an effect. Music-leaning (a 'frog' comes out as an
+    instrument approximation) — used solely if AudioLDM2 is unavailable for a cue."""
     out = {}
     try:
         from pydub import AudioSegment
@@ -1507,9 +1506,49 @@ def _synth_sfx(texts):
                 except OSError: pass
                 out[t] = seg
             except Exception as e:
-                log.warning("sfx '%s' failed: %s", t, e)
+                log.warning("sfx(musicgen) '%s' failed: %s", t, e)
     except Exception as e:
-        log.warning("sfx engine unavailable: %s", e)
+        log.warning("musicgen sfx unavailable: %s", e)
+    return out
+
+
+def _synth_sfx(texts):
+    """A *real* environmental clip per unique [sfx] cue → {text: AudioSegment}. Uses AudioLDM2
+    (trained on AudioSet — actual frogs / a river / waves / a lion roar, not MusicGen's instrument
+    approximations) via the imagegen venv, batching every cue into one model load. Runs inside the
+    caller's llama_paused() window (_run_gen re-enters it; reentrant). Falls back to MusicGen for any
+    cue AudioLDM2 misses. Best-effort — a failure just drops that cue, the story still renders."""
+    texts = [t for t in texts if t]
+    if not texts:
+        return {}
+    from pydub import AudioSegment
+    tmp = {}
+    args = ["--seconds", "2.5"]
+    for t in texts:
+        fd, w = tempfile.mkstemp(suffix=".wav"); os.close(fd)
+        tmp[t] = w
+        args += ["--prompt", t, "--out", w]
+    out = {}
+    try:
+        proc = _run_gen("gen_sfx.py", args, _IMAGE_TIMEOUT)
+        if proc.returncode == 0:
+            for t, w in tmp.items():
+                if os.path.exists(w) and os.path.getsize(w) > 128:
+                    out[t] = (AudioSegment.from_file(w).set_channels(1).set_frame_rate(24000)
+                              .fade_in(40).fade_out(250))
+            log.info("sfx: AudioLDM rendered %d/%d cues", len(out), len(texts))
+        else:
+            log.warning("gen_sfx rc=%d: %s", proc.returncode, (proc.stderr or "")[-300:])
+    except Exception as e:
+        log.warning("sfx (AudioLDM2) failed: %s", e)
+    finally:
+        for w in tmp.values():
+            try: os.unlink(w)
+            except OSError: pass
+    missing = [t for t in texts if t not in out]
+    if missing:
+        log.info("sfx: %d cue(s) fall back to MusicGen", len(missing))
+        out.update(_synth_sfx_musicgen(set(missing)))
     return out
 
 
@@ -1589,18 +1628,28 @@ async def narrate_story_async(body: dict = Body(...)):
     _write_job(job_id, status="queued", kind="story", createdAt=int(_t.time()), errorMessage=None)
 
     def _runner():
-        import asyncio, json as _j
+        import asyncio, json as _j, base64 as _b64, io as _io
+        from pydub import AudioSegment
         try:
             _write_job(job_id, status="running")
             ra = asyncio.run(narrate_story(body=partA_body))
             envA = _j.loads(ra.body.decode("utf-8"))
-            _write_job(job_id, status="partA_done", partA=envA)
             if partB_body["segments"]:
                 rb = asyncio.run(narrate_story(body=partB_body))
                 envB = _j.loads(rb.body.decode("utf-8"))
-                _write_job(job_id, status="done", partB=envB)
+                # Stitch the two halves into ONE seamless track (the user wants a single combined audio,
+                # not two players). Gentle crossfade so the join is inaudible.
+                a = AudioSegment.from_file(_io.BytesIO(_b64.b64decode(envA["audio_b64"])), format="mp3")
+                b = AudioSegment.from_file(_io.BytesIO(_b64.b64decode(envB["audio_b64"])), format="mp3")
+                combined = a.append(b, crossfade=min(400, len(a) // 2, len(b) // 2))
+                buf = _io.BytesIO(); combined.export(buf, format="mp3", bitrate="128k")
+                cb64 = _b64.b64encode(buf.getvalue()).decode("ascii")
+                _write_job(job_id, status="done", audio_b64=cb64,
+                           durationSec=round(len(combined) / 1000.0, 1),
+                           segments=(envA.get("segments", 0) + envB.get("segments", 0)))
             else:
-                _write_job(job_id, status="done")
+                _write_job(job_id, status="done", audio_b64=envA["audio_b64"],
+                           durationSec=envA.get("durationSec"), segments=envA.get("segments", 0))
         except Exception as e:
             log.exception("narrate-story-async failed")
             _write_job(job_id, status="failed", errorMessage=str(e))
