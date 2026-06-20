@@ -1364,6 +1364,116 @@ async def generate_video(body: dict = Body(...)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ComfyUI text-to-video — the GOOD models (LTX-2.3 / Wan2.2), via the running ComfyUI server.
+# Loads a saved API-format workflow, patches the params, submits under llama_paused() so the full 48 GB
+# is free + the /busy "GPU busy" signal fires, then frees ComfyUI VRAM before Qwen reloads.
+# ─────────────────────────────────────────────────────────────────────────────
+_COMFY_WORKFLOWS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "comfy_workflows")
+
+_COMFY_MODELS = {
+    # LTX-2.3 distilled (official, clean) — fast (~30s) + good; family-safe DEFAULT.
+    "ltx23": {
+        "file": "ltx_sulphur_t2v.json", "ckpt": "ltx-2.3-22b-distilled-fp8.safetensors", "ckpt_nodes": ["1", "2"],
+        "map": {"prompt": [("5", "text")], "negative": [("6", "text")],
+                "width": [("8", "width")], "height": [("8", "height")], "length": [("8", "length")],
+                "steps": [("9", "steps")], "seed": [("12", "noise_seed")]},
+        "steps": 8, "neg": "blurry, low quality, distorted, deformed, static, watermark, text",
+        "frame_round": 64, "len_mul": 8, "len_add": 1, "def_frames": 97},
+    # Sulphur (uncensored LTX-2.3 fine-tune) — opt-in only, never a default.
+    "sulphur": {
+        "file": "ltx_sulphur_t2v.json", "ckpt": "sulphur_dev_fp8mixed.safetensors", "ckpt_nodes": ["1", "2"],
+        "map": {"prompt": [("5", "text")], "negative": [("6", "text")],
+                "width": [("8", "width")], "height": [("8", "height")], "length": [("8", "length")],
+                "steps": [("9", "steps")], "seed": [("12", "noise_seed")]},
+        "steps": 8, "neg": "blurry, low quality, distorted", "frame_round": 64,
+        "len_mul": 8, "len_add": 1, "def_frames": 97},
+    # Wan2.2-A14B two-expert — max fidelity, slow (~7.5 min); split steps across experts.
+    "wan22": {
+        "file": "wan22_t2v.json", "ckpt": None,
+        "map": {"prompt": [("7", "text")], "negative": [("8", "text")],
+                "width": [("9", "width")], "height": [("9", "height")], "length": [("9", "length")],
+                "seed": [("10", "noise_seed"), ("11", "noise_seed")]},
+        "steps": 16, "neg": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量",
+        "frame_round": 16, "len_mul": 4, "len_add": 1, "def_frames": 49, "wan_split": True},
+}
+
+
+def _patch_wf(wf, mapping, logical, val):
+    for nid, key in mapping.get(logical, []):
+        if nid in wf:
+            wf[nid]["inputs"][key] = val
+
+
+@app.post("/generate-comfy-video")
+async def generate_comfy_video(body: dict = Body(...)):
+    import base64, json as _j, time as _time
+    from comfy_client import ComfyClient
+    model = (body.get("model") or "ltx23").strip()
+    cfg = _COMFY_MODELS.get(model)
+    if not cfg:
+        raise HTTPException(status_code=400, detail=f"unknown video model '{model}'")
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    with open(os.path.join(_COMFY_WORKFLOWS, cfg["file"])) as f:
+        wf = _j.load(f)
+    m = cfg["map"]
+    fr = cfg["frame_round"]
+    w = max(fr, (int(body.get("width", 1280)) // fr) * fr)
+    h = max(fr, (int(body.get("height", 704)) // fr) * fr)
+    lm, la = cfg["len_mul"], cfg["len_add"]
+    frames = int(body.get("frames", cfg["def_frames"]))
+    frames = max(lm + la, ((frames - la) // lm) * lm + la)   # round to model's frame constraint
+    seed = int(body.get("seed", 424242))
+    steps = int(body.get("steps", cfg["steps"]))
+
+    _patch_wf(wf, m, "prompt", prompt)
+    _patch_wf(wf, m, "negative", (body.get("negative") or cfg["neg"]))
+    _patch_wf(wf, m, "width", w); _patch_wf(wf, m, "height", h); _patch_wf(wf, m, "length", frames)
+    _patch_wf(wf, m, "seed", seed)
+    if cfg.get("wan_split"):
+        half = max(1, steps // 2)
+        for nid in ("10", "11"):
+            if nid in wf:
+                wf[nid]["inputs"]["steps"] = steps
+        if "10" in wf:
+            wf["10"]["inputs"]["end_at_step"] = half
+        if "11" in wf:
+            wf["11"]["inputs"]["start_at_step"] = half
+            wf["11"]["inputs"]["end_at_step"] = steps
+    else:
+        _patch_wf(wf, m, "steps", steps)
+    if cfg.get("ckpt"):
+        for nid in cfg.get("ckpt_nodes", []):
+            if nid in wf:
+                wf[nid]["inputs"]["ckpt_name"] = cfg["ckpt"]
+
+    c = ComfyClient()
+    t0 = _time.time()
+    with llama_paused():
+        pid = c.queue(wf)
+        hist = c.wait(pid, timeout=int(os.environ.get("COMFY_VIDEO_TIMEOUT", "1800")))
+        outs = c.outputs(hist)
+        c.free()                          # release ComfyUI VRAM before Qwen reloads
+    if not outs:
+        raise HTTPException(status_code=500, detail="ComfyUI produced no video output")
+    fn, sub, typ = outs[0]
+    fd, tmp = tempfile.mkstemp(suffix=".mp4"); os.close(fd)
+    try:
+        c.fetch(fn, sub, typ, tmp)
+        with open(tmp, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode("ascii")
+    finally:
+        try: os.unlink(tmp)
+        except OSError: pass
+    secs = round(_time.time() - t0, 1)
+    log.info("comfy-video model=%s %dx%d frames=%d steps=%d -> %.1fs", model, w, h, frames, steps, secs)
+    return JSONResponse({"ok": True, "mime": "video/mp4", "video_b64": b64, "model": model,
+                         "width": w, "height": h, "frames": frames, "renderSec": secs})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Voice-sample storage for XTTS cloning — one reference wav per user, used as the cloned
 # narrator voice for bedtime stories (and any speaker_wav TTS).
 # ─────────────────────────────────────────────────────────────────────────────

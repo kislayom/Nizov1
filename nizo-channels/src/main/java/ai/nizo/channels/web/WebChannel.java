@@ -1272,19 +1272,35 @@ public final class WebChannel implements AutoCloseable {
         proxyGen(ex, "/generate-image", java.time.Duration.ofMinutes(6));
     }
 
-    /** POST /api/video — proxy to sidecar /generate-video (returns {ok, video_b64} JSON). */
+    /** POST /api/video — route by the request's {@code model}: the ComfyUI "good" models (wan22 / ltx23 /
+     *  sulphur) go to the sidecar /generate-comfy-video; everything else (the LTX-Video draft) to the
+     *  legacy /generate-video. Both return {ok, video_b64}. */
     private void handleVideoGenerate(HttpExchange ex) throws IOException {
-        proxyGen(ex, "/generate-video", java.time.Duration.ofMinutes(25));
+        if (rejectIfUnauthenticated(ex)) return;
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
+        byte[] body;
+        try (InputStream is = ex.getRequestBody()) { body = is.readAllBytes(); }
+        String model = "";
+        try { model = mapper.readTree(body).path("model").asText(""); } catch (Exception ignore) { }
+        boolean comfy = model.equals("wan22") || model.equals("ltx23") || model.equals("sulphur");
+        String path = comfy ? "/generate-comfy-video" : "/generate-video";
+        // Wan2.2 full-step is ~7.5 min; give the ComfyUI path generous headroom.
+        java.time.Duration timeout = java.time.Duration.ofMinutes(comfy ? 40 : 25);
+        forwardJson(ex, path, timeout, body);
     }
 
     /** Shared forwarder for the media-gen proxies — POST JSON body to the sidecar, relay the JSON
-     *  envelope verbatim. Both sidecar endpoints pause Qwen + run on the GPU, hence the long timeout;
+     *  envelope verbatim. The sidecar endpoints pause Qwen + run on the GPU, hence the long timeout;
      *  the virtual-thread server means the long hold doesn't block other requests. */
     private void proxyGen(HttpExchange ex, String sidecarPath, java.time.Duration timeout) throws IOException {
         if (rejectIfUnauthenticated(ex)) return;
         if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
         byte[] body;
         try (InputStream is = ex.getRequestBody()) { body = is.readAllBytes(); }
+        forwardJson(ex, sidecarPath, timeout, body);
+    }
+
+    private void forwardJson(HttpExchange ex, String sidecarPath, java.time.Duration timeout, byte[] body) throws IOException {
         try {
             java.net.http.HttpResponse<byte[]> r = VOICE_HTTP.send(
                     java.net.http.HttpRequest.newBuilder(java.net.URI.create(VOICE_BASE + sidecarPath))

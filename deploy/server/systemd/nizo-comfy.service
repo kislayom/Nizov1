@@ -1,0 +1,24 @@
+[Unit]
+Description=Nizo ComfyUI (video generation backend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kislay
+WorkingDirectory=/mnt/ai-models/comfy
+# Bind to loopback only — reached via Nizo's /api/wan/* proxy, never exposed directly.
+# We pause nizo-llama during sampling for the full 48 GB, and the orchestrator calls ComfyUI's
+# /free after each job so it idles at ~0 GB VRAM and coexists with Qwen between jobs.
+ExecStart=/mnt/ai-models/envs/comfy/bin/python /mnt/ai-models/comfy/main.py \
+    --listen 127.0.0.1 --port 8188 \
+    --output-directory /mnt/ai-models/comfy/output \
+    --disable-auto-launch
+Environment=PYTHONUNBUFFERED=1
+Environment=HF_HOME=/mnt/ai-models/caches/hf
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
