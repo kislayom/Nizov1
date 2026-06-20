@@ -5779,15 +5779,24 @@ function inlineInto(target, src) {
         pos = end + 2; continue;
       }
     }
-    // *italic* / _italic_
+    // *italic* / _italic_ — but '_' must be at a WORD BOUNDARY (CommonMark intraword rule), so
+    // snake_case identifiers (net_income, free_cash_flow, quoteSummary fields) are never italicised.
     if ((src[pos] === '*' || src[pos] === '_') && src[pos + 1] !== src[pos]) {
       const ch = src[pos];
-      const end = src.indexOf(ch, pos + 1);
-      if (end > pos && src[end - 1] !== ' ') {
-        const em = el('em');
-        inlineInto(em, src.slice(pos + 1, end));
-        target.appendChild(em);
-        pos = end + 1; continue;
+      const alnum = (c) => /[A-Za-z0-9]/.test(c || '');
+      // left boundary: '*' is fine intraword; '_' only opens when the preceding char isn't alphanumeric
+      if (ch === '*' || !alnum(src[pos - 1])) {
+        let end = src.indexOf(ch, pos + 1);
+        // right boundary: a closing '_' that sits inside a word (followed by alphanumeric) doesn't count
+        if (ch === '_') {
+          while (end > pos && alnum(src[end + 1])) end = src.indexOf(ch, end + 1);
+        }
+        if (end > pos && src[end - 1] !== ' ') {
+          const em = el('em');
+          inlineInto(em, src.slice(pos + 1, end));
+          target.appendChild(em);
+          pos = end + 1; continue;
+        }
       }
     }
     // Plain run — collect chars until next markdown trigger

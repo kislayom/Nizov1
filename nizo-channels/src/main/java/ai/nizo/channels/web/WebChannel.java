@@ -408,16 +408,77 @@ public final class WebChannel implements AutoCloseable {
         ex.getResponseHeaders().add("Content-Disposition",
                 (inline ? "inline" : "attachment") + "; filename=\"" + filename.replace("\"", "") + "\"");
         ex.getResponseHeaders().add("Accept-Ranges", "bytes");
-        ex.getResponseHeaders().add("Cache-Control", "no-store");
-        if (head) {   // existence/metadata check (used by the bedtime-story Part 2 poll) — no body
+        // Generated media lives under unique, immutable names (story-<id>.mp3, gen/<uuid>.mp4) so it's
+        // safe (and far better for seeking) to let the browser cache it; non-media keeps no-store.
+        ex.getResponseHeaders().add("Cache-Control", inline ? "private, max-age=86400" : "no-store");
+
+        if (head) {   // existence/metadata check (used by the bedtime-story poll) — headers only, no body
             ex.getResponseHeaders().add("Content-Length", String.valueOf(size));
             ex.sendResponseHeaders(200, -1);
             ex.close();
             return;
         }
+
+        // Honour a single byte-range request with 206 Partial Content so <video>/<audio> scrubbing works
+        // (WebKit/Safari requires it) instead of re-buffering the whole file on every seek. We advertised
+        // Accept-Ranges above, so we must actually serve ranges.
+        long[] range = parseRange(ex.getRequestHeaders().getFirst("Range"), size);
+        if (range != null) {
+            long start = range[0], end = range[1], len = end - start + 1;
+            ex.getResponseHeaders().add("Content-Range", "bytes " + start + "-" + end + "/" + size);
+            ex.sendResponseHeaders(206, len);
+            try (OutputStream os = ex.getResponseBody();
+                 java.nio.channels.FileChannel ch =
+                         java.nio.channels.FileChannel.open(target, java.nio.file.StandardOpenOption.READ)) {
+                ch.position(start);
+                java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(64 * 1024);
+                long remaining = len;
+                while (remaining > 0) {
+                    buf.clear();
+                    if (remaining < buf.capacity()) buf.limit((int) remaining);
+                    int r = ch.read(buf);
+                    if (r < 0) break;
+                    os.write(buf.array(), 0, r);
+                    remaining -= r;
+                }
+            }
+            return;
+        }
+
         ex.sendResponseHeaders(200, size);
         try (OutputStream os = ex.getResponseBody()) {
             Files.copy(target, os);
+        }
+    }
+
+    /** Parse a single byte-range request header ("bytes=start-end", "bytes=start-", or suffix
+     *  "bytes=-N"), clamped to [0,size). Returns {start,end} inclusive, or null when absent,
+     *  malformed, multi-range, or unsatisfiable — in which case the caller serves the full 200 body. */
+    private static long[] parseRange(String header, long size) {
+        if (header == null || !header.startsWith("bytes=") || size <= 0) return null;
+        String spec = header.substring(6).trim();
+        if (spec.indexOf(',') >= 0) return null;   // multi-range unsupported → full body
+        int dash = spec.indexOf('-');
+        if (dash < 0) return null;
+        try {
+            String a = spec.substring(0, dash).trim();
+            String b = spec.substring(dash + 1).trim();
+            long start, end;
+            if (a.isEmpty()) {                      // suffix range: bytes=-N → last N bytes
+                if (b.isEmpty()) return null;
+                long n = Long.parseLong(b);
+                if (n <= 0) return null;
+                start = Math.max(0, size - n);
+                end = size - 1;
+            } else {
+                start = Long.parseLong(a);
+                end = b.isEmpty() ? size - 1 : Long.parseLong(b);
+            }
+            if (end >= size) end = size - 1;
+            if (start < 0 || start > end) return null;
+            return new long[]{start, end};
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
