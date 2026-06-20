@@ -585,6 +585,23 @@
   body[data-view="india"] #ctxBar,
   body[data-view="india"] #log,
   body[data-view="india"] form#composer { display: none !important; }
+  body:not([data-view="video"]) .video-view { display: none !important; }
+  body[data-view="video"] #ctxBar,
+  body[data-view="video"] #log,
+  body[data-view="video"] form#composer { display: none !important; }
+  .video-view {
+    padding: 28px 32px; max-width: 920px; margin: 0 auto; width: 100%;
+    display: flex; flex-direction: column; gap: 18px; min-height: 0; overflow-y: auto;
+  }
+  .video-result { background: var(--surface-1, rgba(255,255,255,0.04));
+    border: 1px solid rgba(255,255,255,0.10); border-radius: 14px; padding: 16px; }
+  .video-result video { width: 100%; border-radius: 10px; display: block; background: #000; }
+  .video-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .video-gallery video { width: 100%; border-radius: 10px; background: #000; }
+  .vidspin { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(255,255,255,0.25);
+    border-top-color: var(--md-primary, #7aa2ff); border-radius: 50%; animation: vidspin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 8px; }
+  @keyframes vidspin { to { transform: rotate(360deg); } }
 
   /* ── India Picks tab ─────────────────────────────────────────────────── */
   .india-view {
@@ -3030,6 +3047,7 @@ window._loadPdfLibs = function () {
     <button type="button" class="view-tab" id="viewTabStock" role="tab" aria-selected="false" data-view="stocks">📈 Stocks</button>
     <button type="button" class="view-tab" id="viewTabIndia" role="tab" aria-selected="false" data-view="india">🇮🇳 India Picks</button>
     <button type="button" class="view-tab" id="viewTabMusic" role="tab" aria-selected="false" data-view="music">🎵 Music</button>
+    <button type="button" class="view-tab" id="viewTabVideo" role="tab" aria-selected="false" data-view="video">🎬 Video</button>
     <button type="button" class="user-chip" id="userChip" title="Switch user">👤</button>
   </nav>
 
@@ -3369,6 +3387,35 @@ window._loadPdfLibs = function () {
       <button class="music-compose-btn" id="musicComposeBtn">🎵 Compose</button>
       <div class="music-error" id="musicError" style="display:none"></div>
       <div id="musicLibrary"></div>
+    </div>
+
+    <div class="video-view" id="videoView">
+      <div class="music-prompt-card">
+        <label for="videoPrompt">Describe the video</label>
+        <textarea id="videoPrompt" placeholder="a calm koi pond at dusk, gentle ripples, slow cinematic pan over lily pads…"></textarea>
+      </div>
+      <div class="music-controls-card">
+        <div class="control-row">
+          <span class="label-strong">Resolution</span>
+          <div class="music-size-picker" id="videoRes">
+            <button data-w="448" data-h="256" class="active">256p · fast</button>
+            <button data-w="704" data-h="480">480p</button>
+            <button data-w="768" data-h="512">512p · sharp</button>
+          </div>
+        </div>
+        <div class="control-row">
+          <span class="label-strong">Length</span>
+          <input type="range" id="videoFrames" min="25" max="121" value="49" step="24">
+          <span class="qty" id="videoFramesLabel">~2s</span>
+        </div>
+        <div class="control-row" style="font-size:12px;color:var(--md-on-surface-variant);">
+          Currently rendering with LTX-Video. A higher-quality Wan/LTX-2.3 engine is being benchmarked and will slot in here automatically.
+        </div>
+      </div>
+      <button class="music-compose-btn" id="videoGenBtn">🎬 Generate video</button>
+      <div class="music-error" id="videoError" style="display:none"></div>
+      <div id="videoResult"></div>
+      <div class="video-gallery" id="videoGallery"></div>
     </div>
 
     <div id="log" aria-live="polite">
@@ -7580,7 +7627,7 @@ const STOCK_VIEW_KEY = 'nizo:view';
 const STOCK_CHAT_KEY = 'nizo:stock:chatId';
 
 function setView(view) {
-  if (view !== 'chat' && view !== 'stocks' && view !== 'music' && view !== 'india') view = 'chat';
+  if (view !== 'chat' && view !== 'stocks' && view !== 'music' && view !== 'india' && view !== 'video') view = 'chat';
   document.body.dataset.view = view;
   document.getElementById('viewTabChat').setAttribute('aria-selected',  view === 'chat'   ? 'true' : 'false');
   document.getElementById('viewTabStock').setAttribute('aria-selected', view === 'stocks' ? 'true' : 'false');
@@ -7588,6 +7635,8 @@ function setView(view) {
   if (indiaTab) indiaTab.setAttribute('aria-selected', view === 'india' ? 'true' : 'false');
   const musicTab = document.getElementById('viewTabMusic');
   if (musicTab) musicTab.setAttribute('aria-selected', view === 'music' ? 'true' : 'false');
+  const videoTab = document.getElementById('viewTabVideo');
+  if (videoTab) videoTab.setAttribute('aria-selected', view === 'video' ? 'true' : 'false');
   localStorage.setItem(STOCK_VIEW_KEY, view);
   // Refresh the cached library every time we land on the stocks tab.
   if (view === 'stocks' && typeof loadStockLibrary === 'function') {
@@ -7603,7 +7652,74 @@ const __indiaTabBtn = document.getElementById('viewTabIndia');
 if (__indiaTabBtn) __indiaTabBtn.addEventListener('click', () => setView('india'));
 const __musicTabBtn = document.getElementById('viewTabMusic');
 if (__musicTabBtn) __musicTabBtn.addEventListener('click', () => setView('music'));
+const __videoTabBtn = document.getElementById('viewTabVideo');
+if (__videoTabBtn) __videoTabBtn.addEventListener('click', () => setView('video'));
 setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
+
+// ─────────── Video studio: prompt → /api/video (LTX-Video) → inline player + gallery ───────────
+(function initVideoStudio() {
+  const promptEl = document.getElementById('videoPrompt');
+  const resPicker = document.getElementById('videoRes');
+  const framesEl = document.getElementById('videoFrames');
+  const framesLabel = document.getElementById('videoFramesLabel');
+  const genBtn = document.getElementById('videoGenBtn');
+  const errEl = document.getElementById('videoError');
+  const resultEl = document.getElementById('videoResult');
+  const galleryEl = document.getElementById('videoGallery');
+  if (!genBtn || !promptEl) return;
+  let w = 448, h = 256;
+  resPicker.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    [...resPicker.children].forEach((x) => x.classList.remove('active'));
+    b.classList.add('active'); w = +b.dataset.w; h = +b.dataset.h;
+  });
+  const updFrames = () => { framesLabel.textContent = '~' + Math.max(1, Math.round(framesEl.value / 24)) + 's'; };
+  framesEl.addEventListener('input', updFrames); updFrames();
+  let busy = false;
+  genBtn.addEventListener('click', async () => {
+    if (busy) return;
+    const prompt = (promptEl.value || '').trim();
+    if (!prompt) { errEl.style.display = 'block'; errEl.textContent = 'Describe the video first.'; return; }
+    errEl.style.display = 'none'; busy = true; genBtn.disabled = true;
+    const t0 = Date.now();
+    resultEl.innerHTML = '';
+    const card = el('div', { class: 'video-result' });
+    const status = el('div', {}, '');
+    card.appendChild(status); resultEl.appendChild(card);
+    const tick = setInterval(() => {
+      status.innerHTML = '<span class="vidspin"></span> Generating ' + w + '×' + h + ' · ' +
+        framesLabel.textContent + ' … ' + Math.round((Date.now() - t0) / 1000) + 's (video is GPU-heavy, give it a minute)';
+    }, 250);
+    try {
+      const r = await fetch('/api/video', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, width: w, height: h, frames: +framesEl.value }),
+      });
+      clearInterval(tick);
+      if (!r.ok) { const tx = await r.text(); throw new Error('HTTP ' + r.status + ' ' + tx.slice(0, 200)); }
+      const d = await r.json();
+      const b64 = d.video_b64 || '';
+      if (!b64) throw new Error('renderer returned no video');
+      const bin = atob(b64); const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([arr], { type: d.mime || 'video/mp4' }));
+      const secs = Math.round((Date.now() - t0) / 1000);
+      card.innerHTML = '';
+      card.appendChild(el('div', { style: 'font-size:13px;color:var(--md-on-surface-variant);margin-bottom:8px' },
+        '✅ ' + w + '×' + h + ' · ' + framesLabel.textContent + ' · rendered in ' + secs + 's'));
+      card.appendChild(el('video', { controls: '', src: url, preload: 'metadata', autoplay: '', loop: '', muted: '' }));
+      card.appendChild(el('a', { href: url, download: 'nizo-video.mp4', class: 'btn',
+        style: 'display:inline-block;margin-top:10px' }, '⬇ Download'));
+      galleryEl.prepend(el('video', { controls: '', src: url, preload: 'metadata' }));
+    } catch (e) {
+      clearInterval(tick);
+      resultEl.innerHTML = '';
+      errEl.style.display = 'block'; errEl.textContent = 'Generation failed: ' + e.message;
+    } finally {
+      busy = false; genBtn.disabled = false;
+    }
+  });
+})();
 
 /* ════════════════════════════════════════════════════════════════════════════
  * Music Studio — text-to-music via /api/music/compose. Library persists in
