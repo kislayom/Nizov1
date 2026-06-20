@@ -187,6 +187,19 @@ public final class WebAuth {
         return addr != null && addr.isLoopbackAddress();
     }
 
+    /** True iff the request came from loopback OR a private LAN address (RFC1918 10/172.16-31/192.168,
+     *  link-local 169.254 / fe80::, or IPv6 unique-local fc00::/7). The index handler seeds the auth
+     *  cookie for these so same-network access just works, while a public-internet caller stays gated. */
+    public static boolean isLanOrLoopback(HttpExchange ex) {
+        InetSocketAddress sa = ex.getRemoteAddress();
+        if (sa == null) return false;
+        InetAddress a = sa.getAddress();
+        if (a == null) return false;
+        if (a.isLoopbackAddress() || a.isSiteLocalAddress() || a.isLinkLocalAddress()) return true;
+        byte[] b = a.getAddress();                    // IPv6 unique-local fc00::/7 (not covered above)
+        return b != null && b.length == 16 && (b[0] & 0xFE) == 0xFC;
+    }
+
     /** Cookie attributes string emitted by {@link #setCookieValue(String)}. */
     public static String setCookieValue(String token) {
         // HttpOnly: blocks document.cookie reads from any in-page script.

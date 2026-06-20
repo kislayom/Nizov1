@@ -170,12 +170,12 @@ public final class WebChannel implements AutoCloseable {
 
     private void handleIndex(HttpExchange ex) throws IOException {
         if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
-        // Index is public — no token required to *load* the page. But if the caller is on
-        // loopback we plant the cookie that lets every subsequent request sail through. The
-        // result: a user on the box just hits / and the UI works without any setup. Remote
-        // callers (NIZO_WEB_HOST=0.0.0.0) get the page but no cookie — they'll need to paste
-        // the token into the Settings dialog.
-        if (auth != null && WebAuth.isLoopback(ex)) {
+        // Index is public — no token required to *load* the page. If the caller is on loopback OR the
+        // private LAN, plant the cookie so every subsequent request sails through (a user on the box or
+        // on the same home network just hits / and the UI works — no setup). A PUBLIC-internet caller
+        // gets the page but no cookie, so the token still gates the open internet. (The owner opted into
+        // LAN exposure via NIZO_WEB_HOST=0.0.0.0; trusting the private LAN is the matching default.)
+        if (auth != null && WebAuth.isLanOrLoopback(ex)) {
             ex.getResponseHeaders().add("Set-Cookie", WebAuth.setCookieValue(auth.token()));
         }
         // Dev override: if NIZO_WEB_DIR points at a directory with index.html, serve from disk so
@@ -410,6 +410,32 @@ public final class WebChannel implements AutoCloseable {
         respondJson(ex, 200, mapper.writeValueAsString(Map.of("items", items)));
     }
 
+    /** Best-effort secure delete: overwrite the file's bytes with random data and flush to disk before
+     *  unlinking, so undelete / file-carving tools can't recover the content. Returns whether a file was
+     *  removed. NOTE: on SSD/NVMe, wear-leveling + copy-on-write can leave the *physical* blocks intact
+     *  despite a logical overwrite — true unrecoverability there needs ATA secure-erase/TRIM at the device
+     *  level, which can't be done per file. This defeats normal undelete/forensic-carving tools. */
+    private static boolean secureDelete(Path p) throws IOException {
+        if (!Files.exists(p)) return false;
+        if (Files.isRegularFile(p)) {
+            long size = Files.size(p);
+            try (java.nio.channels.FileChannel ch =
+                         java.nio.channels.FileChannel.open(p, java.nio.file.StandardOpenOption.WRITE)) {
+                java.security.SecureRandom rnd = new java.security.SecureRandom();
+                byte[] buf = new byte[64 * 1024];
+                long written = 0;
+                while (written < size) {
+                    rnd.nextBytes(buf);
+                    int n = (int) Math.min(buf.length, size - written);
+                    ch.write(java.nio.ByteBuffer.wrap(buf, 0, n));
+                    written += n;
+                }
+                ch.force(true);   // flush the random bytes to disk before unlinking
+            }
+        }
+        return Files.deleteIfExists(p);
+    }
+
     private void handleWorkspaceFile(HttpExchange ex) throws IOException {
         if (rejectIfUnauthenticated(ex)) return;
         if (ctx == null) { respondJson(ex, 501, "{\"error\":\"context not wired\"}"); return; }
@@ -432,9 +458,9 @@ public final class WebChannel implements AutoCloseable {
         Path root = ctx.workspaceDir().toAbsolutePath().normalize();
         Path target = root.resolve(relPath).normalize();
         if (!target.startsWith(root)) { respondJson(ex, 400, "{\"error\":\"path escapes workspace\"}"); return; }
-        if (del) {   // permanently delete a generated file (library / per-clip delete) — idempotent
+        if (del) {   // permanently + securely delete (overwrite the bytes, then unlink) — idempotent
             try {
-                boolean removed = Files.deleteIfExists(target);
+                boolean removed = secureDelete(target);
                 respondJson(ex, 200, "{\"ok\":true,\"deleted\":" + removed + "}");
             } catch (IOException e) {
                 respondJson(ex, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");

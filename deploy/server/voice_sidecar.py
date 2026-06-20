@@ -1591,10 +1591,17 @@ def delete_video_job(job_id: str):
     if rel:
         wp = os.path.join(_VIDEO_WORKSPACE_GEN, os.path.basename(rel))
         try:
-            if os.path.exists(wp):
+            if os.path.isfile(wp):
+                sz = os.path.getsize(wp)
+                with open(wp, "r+b", buffering=0) as f:   # overwrite bytes + fsync before unlink (anti-undelete)
+                    w = 0
+                    while w < sz:
+                        n = min(65536, sz - w); f.write(os.urandom(n)); w += n
+                    f.flush(); os.fsync(f.fileno())
                 os.unlink(wp); removed.append(os.path.basename(wp))
         except Exception:
-            pass
+            try: os.unlink(wp); removed.append(os.path.basename(wp))
+            except Exception: pass
     try:
         _job_path(job_id).unlink(missing_ok=True)
     except Exception:
