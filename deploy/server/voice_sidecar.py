@@ -1624,6 +1624,59 @@ def _ensure_video_worker():
             _video_worker_started = True
 
 
+def _comfy_busy():
+    """True if ComfyUI is actively running/queuing a render (any source — sidecar OR an external script)."""
+    try:
+        import urllib.request, json as _j
+        d = _j.loads(urllib.request.urlopen("http://127.0.0.1:8188/prompt", timeout=4).read())
+        return ((d.get("exec_info") or {}).get("queue_remaining", 0) or 0) > 0
+    except Exception:
+        return False
+
+
+def _qwen_up():
+    try:
+        import urllib.request
+        return urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=4).status == 200
+    except Exception:
+        return False
+
+
+def _gpu_watchdog():
+    """Auto-recover the recurring outage (#43): an interrupted render leaves ComfyUI holding ~40 GB and
+    never /free's, so llama-server (Qwen) can't allocate and crash-loops. Every 90 s, if NOTHING is
+    rendering (no sidecar pause, empty queue, ComfyUI idle) yet Qwen is down, free ComfyUI's VRAM and
+    restart nizo-llama. The render-in-flight guards keep it from ever touching a legitimate render."""
+    import time as _t, urllib.request, json as _j
+    while True:
+        _t.sleep(90)
+        try:
+            if _llama_paused_count > 0 or not _video_q.empty() or _comfy_busy():
+                continue                      # a render is (or may be) in flight — never interfere
+            if _qwen_up():
+                continue
+            free = _gpu_free_mib()
+            if free < 35000:                  # Qwen down + VRAM held → the leak: free ComfyUI first
+                log.warning("watchdog: Qwen down, only %d MiB free, no render in flight → freeing ComfyUI", free)
+                try:
+                    req = urllib.request.Request("http://127.0.0.1:8188/free",
+                            data=_j.dumps({"unload_models": True, "free_memory": True}).encode(),
+                            headers={"Content-Type": "application/json"})
+                    urllib.request.urlopen(req, timeout=10)
+                except Exception:
+                    pass
+                _t.sleep(3)
+            else:
+                log.warning("watchdog: Qwen down but %d MiB free → restarting nizo-llama", free)
+            _subprocess.run(["sudo", "systemctl", "reset-failed", "nizo-llama"], capture_output=True)
+            _subprocess.run(["sudo", "systemctl", "restart", "nizo-llama"], capture_output=True)
+        except Exception as e:
+            log.warning("watchdog error: %s", e)
+
+
+threading.Thread(target=_gpu_watchdog, name="gpu-watchdog", daemon=True).start()
+
+
 @app.post("/generate-comfy-video-async")
 async def generate_comfy_video_async(body: dict = Body(...)):
     import time as _t
