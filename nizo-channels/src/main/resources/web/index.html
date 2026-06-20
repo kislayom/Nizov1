@@ -3396,6 +3396,14 @@ window._loadPdfLibs = function () {
       </div>
       <div class="music-controls-card">
         <div class="control-row">
+          <span class="label-strong">Model</span>
+          <div class="music-size-picker" id="videoModel">
+            <button data-model="ltx" class="active">LTX-Video · fast draft</button>
+            <button data-model="wan22" data-soon="1">Wan2.2 · best ⏳</button>
+            <button data-model="ltx23" data-soon="1">LTX-2.3 ⏳</button>
+          </div>
+        </div>
+        <div class="control-row">
           <span class="label-strong">Resolution</span>
           <div class="music-size-picker" id="videoRes">
             <button data-w="448" data-h="256" class="active">256p · fast</button>
@@ -7673,6 +7681,21 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
     [...resPicker.children].forEach((x) => x.classList.remove('active'));
     b.classList.add('active'); w = +b.dataset.w; h = +b.dataset.h;
   });
+  const modelPicker = document.getElementById('videoModel');
+  let model = 'ltx';
+  if (modelPicker) modelPicker.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.soon) {
+      errEl.style.display = 'block';
+      errEl.textContent = b.dataset.model === 'wan22'
+        ? 'Wan2.2 (best quality) is finishing setup on the server — it’ll be selectable shortly.'
+        : 'LTX-2.3 is finishing setup on the server — it’ll be selectable shortly.';
+      return;   // stays on the current (functional) model
+    }
+    errEl.style.display = 'none';
+    [...modelPicker.children].forEach((x) => x.classList.remove('active'));
+    b.classList.add('active'); model = b.dataset.model;
+  });
   const updFrames = () => { framesLabel.textContent = '~' + Math.max(1, Math.round(framesEl.value / 24)) + 's'; };
   framesEl.addEventListener('input', updFrames); updFrames();
   let busy = false;
@@ -7693,7 +7716,7 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
     try {
       const r = await fetch('/api/video', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, width: w, height: h, frames: +framesEl.value }),
+        body: JSON.stringify({ prompt, width: w, height: h, frames: +framesEl.value, model }),
       });
       clearInterval(tick);
       if (!r.ok) { const tx = await r.text(); throw new Error('HTTP ' + r.status + ' ' + tx.slice(0, 200)); }
