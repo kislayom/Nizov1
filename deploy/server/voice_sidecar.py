@@ -1404,6 +1404,15 @@ _COMFY_MODELS = {
                 "steps": [("9", "steps")], "seed": [("12", "noise_seed")]},
         "steps": 8, "neg": "blurry, low quality, distorted, deformed, static, watermark, text",
         "frame_round": 32, "len_mul": 8, "len_add": 1, "def_frames": 49},
+    # MAX-QUALITY 4K: non-distilled DEV LTX-2.3 at 28 steps + real CFG (distill LoRA off in the workflow)
+    # → genuinely detailed base, then the same upscale ladder + downscale. Much slower (~5-10 min).
+    "ltx_4k_hq": {
+        "file": "ltx_4k_hq.json", "ckpt": "ltx-2.3-22b-dev-fp8.safetensors", "ckpt_nodes": ["1", "2"],
+        "map": {"prompt": [("5", "text")], "negative": [("6", "text")],
+                "width": [("8", "width")], "height": [("8", "height")], "length": [("8", "length")],
+                "steps": [("9", "steps")], "seed": [("12", "noise_seed")]},
+        "steps": 28, "neg": "blurry, soft, low quality, distorted, deformed, washed out, watermark, text",
+        "frame_round": 32, "len_mul": 8, "len_add": 1, "def_frames": 49},
     # LTX-2.3 long video via native temporal tiling (LTXVLoopingSampler) — VRAM bounded by one tile, so
     # length is ~unbounded; 720p. NOTE: steps live in a ManualSigmas node (9), so DON'T patch steps here.
     "ltx_long": {
@@ -1442,6 +1451,8 @@ def _build_comfy_video_workflow(body):
             cfg_key = model
     else:
         cfg_key = model
+    if cfg_key == "ltx_4k" and (body.get("quality") or "").lower() == "max":
+        cfg_key = "ltx_4k_hq"          # non-distilled dev model, 28 steps — sharper, much slower
     cfg = _COMFY_MODELS.get(cfg_key)
     if not cfg:
         raise ValueError(f"unknown video model '{model}'")
@@ -1452,7 +1463,7 @@ def _build_comfy_video_workflow(body):
     lm, la = cfg["len_mul"], cfg["len_add"]
     downscale = None
 
-    if cfg_key == "ltx_4k":
+    if cfg_key in ("ltx_4k", "ltx_4k_hq"):
         # Always render the FULL-detail 720p base → LTX ×2→×2 ladder → 5120×2816 (genuine high-freq
         # detail, per the worker's proof), then DOWNSCALE to the requested target. Supersampling a small
         # base looked soft; a real base + downscale is sharp.
