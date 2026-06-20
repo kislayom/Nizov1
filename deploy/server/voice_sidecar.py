@@ -1395,6 +1395,24 @@ _COMFY_MODELS = {
                 "seed": [("10", "noise_seed"), ("11", "noise_seed")]},
         "steps": 16, "neg": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量",
         "frame_round": 16, "len_mul": 4, "len_add": 1, "def_frames": 49, "wan_split": True},
+    # LTX-2.3 4K upscale ladder: base render → 2×(spatial x2 upsample + refine) → final = base×4.
+    # Resolution tier sets the BASE size; node 8 width/height. Slow (~2.5 min). Short clips only.
+    "ltx_4k": {
+        "file": "ltx_4k_upscale.json", "ckpt": "ltx-2.3-22b-distilled-fp8.safetensors", "ckpt_nodes": ["1", "2"],
+        "map": {"prompt": [("5", "text")], "negative": [("6", "text")],
+                "width": [("8", "width")], "height": [("8", "height")], "length": [("8", "length")],
+                "steps": [("9", "steps")], "seed": [("12", "noise_seed")]},
+        "steps": 8, "neg": "blurry, low quality, distorted, deformed, static, watermark, text",
+        "frame_round": 32, "len_mul": 8, "len_add": 1, "def_frames": 49},
+    # LTX-2.3 long video via native temporal tiling (LTXVLoopingSampler) — VRAM bounded by one tile, so
+    # length is ~unbounded; 720p. NOTE: steps live in a ManualSigmas node (9), so DON'T patch steps here.
+    "ltx_long": {
+        "file": "ltx_long_video.json", "ckpt": "ltx-2.3-22b-distilled-fp8.safetensors", "ckpt_nodes": ["1", "2"],
+        "map": {"prompt": [("5", "text")], "negative": [("6", "text")],
+                "width": [("8", "width")], "height": [("8", "height")], "length": [("8", "length")],
+                "seed": [("12", "noise_seed")]},
+        "steps": None, "neg": "blurry, low quality, distorted, deformed, watermark, text",
+        "frame_round": 32, "len_mul": 8, "len_add": 1, "def_frames": 721},
 }
 
 
@@ -1405,25 +1423,52 @@ def _patch_wf(wf, mapping, logical, val):
 
 
 def _build_comfy_video_workflow(body):
-    """Load + patch the saved workflow for the requested model. Returns (workflow_dict, meta)."""
+    """Pick + patch the right workflow for the request. Routes LTX by resolution + length:
+       >145 frames → ltx_long (temporal tiling, 720p); resolution 1080p/4k/5k → ltx_4k (upscale ladder,
+       base = final/4); else the base ltx23/sulphur. Returns (workflow_dict, meta with FINAL res)."""
     import json as _j
     model = (body.get("model") or "ltx23").strip()
-    cfg = _COMFY_MODELS.get(model)
-    if not cfg:
-        raise ValueError(f"unknown video model '{model}'")
     if not (body.get("prompt") or "").strip():
         raise ValueError("prompt is required")
+    resolution = (body.get("resolution") or "720p").lower()
+    frames_req = int(body.get("frames", 97))
+
+    if model in ("ltx23", "sulphur"):
+        if frames_req > 145:
+            cfg_key = "ltx_long"
+        elif resolution in ("1080p", "4k", "5k"):
+            cfg_key = "ltx_4k"
+        else:
+            cfg_key = model
+    else:
+        cfg_key = model
+    cfg = _COMFY_MODELS.get(cfg_key)
+    if not cfg:
+        raise ValueError(f"unknown video model '{model}'")
+
     with open(os.path.join(_COMFY_WORKFLOWS, cfg["file"])) as f:
         wf = _j.load(f)
     m = cfg["map"]
-    fr = cfg["frame_round"]
-    w = max(fr, (int(body.get("width", 1280)) // fr) * fr)
-    h = max(fr, (int(body.get("height", 704)) // fr) * fr)
     lm, la = cfg["len_mul"], cfg["len_add"]
-    frames = int(body.get("frames", cfg["def_frames"]))
-    frames = max(lm + la, ((frames - la) // lm) * lm + la)   # round to model's frame constraint
+
+    if cfg_key == "ltx_4k":
+        base = {"1080p": (480, 256), "4k": (960, 512), "5k": (1280, 704)}.get(resolution, (960, 512))
+        w, h = base
+        final_w, final_h = w * 4, h * 4               # the ladder upsamples ×2 twice
+        frames = max(lm + la, ((min(frames_req, 121) - la) // lm) * lm + la)   # 4K is costly → cap short
+    elif cfg_key == "ltx_long":
+        w, h = 1280, 704
+        final_w, final_h = w, h
+        frames = max(lm + la, ((min(frames_req, 2881) - la) // lm) * lm + la)  # up to 120s @24fps
+    else:
+        fr = cfg["frame_round"]
+        w = max(fr, (int(body.get("width", 1280)) // fr) * fr)
+        h = max(fr, (int(body.get("height", 704)) // fr) * fr)
+        final_w, final_h = w, h
+        frames = max(lm + la, ((frames_req - la) // lm) * lm + la)
+
     seed = int(body.get("seed", 424242))
-    steps = int(body.get("steps", cfg["steps"]))
+    steps = int(body.get("steps", cfg.get("steps") or 8))
     _patch_wf(wf, m, "prompt", (body.get("prompt") or "").strip())
     _patch_wf(wf, m, "negative", (body.get("negative") or cfg["neg"]))
     _patch_wf(wf, m, "width", w); _patch_wf(wf, m, "height", h); _patch_wf(wf, m, "length", frames)
@@ -1439,12 +1484,12 @@ def _build_comfy_video_workflow(body):
             wf["11"]["inputs"]["start_at_step"] = half
             wf["11"]["inputs"]["end_at_step"] = steps
     else:
-        _patch_wf(wf, m, "steps", steps)
+        _patch_wf(wf, m, "steps", steps)   # no-op for ltx_long (steps live in a ManualSigmas node)
     if cfg.get("ckpt"):
         for nid in cfg.get("ckpt_nodes", []):
             if nid in wf:
                 wf[nid]["inputs"]["ckpt_name"] = cfg["ckpt"]
-    return wf, {"model": model, "width": w, "height": h, "frames": frames, "steps": steps}
+    return wf, {"model": model, "tier": cfg_key, "width": final_w, "height": final_h, "frames": frames, "steps": steps}
 
 
 def _render_comfy_video(wf, dst_path, on_progress=None):

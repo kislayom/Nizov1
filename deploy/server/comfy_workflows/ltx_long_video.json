@@ -1,0 +1,200 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "LTXAVTextEncoderLoader",
+    "inputs": {
+      "text_encoder": "gemma_3_12B_it_fp8_scaled.safetensors",
+      "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "lora_name": "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+      "strength_model": 1.0
+    }
+  },
+  "4": {
+    "class_type": "ModelSamplingLTXV",
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "max_shift": 2.05,
+      "base_shift": 0.95
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "A continuous flight over a vast natural landscape at golden hour. The camera drifts slowly forward above rolling green hills, winding rivers, and forests, the warm sun low on the horizon casting long shadows. Smooth steady aerial motion, cinematic, photorealistic, rich detail, gentle clouds drifting.",
+      "clip": [
+        "2",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, low quality, still frame, frozen, watermark, overlay, titles, subtitles, jpeg artifacts, distorted, abrupt cuts, flicker",
+      "clip": [
+        "2",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "LTXVConditioning",
+    "inputs": {
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "6",
+        0
+      ],
+      "frame_rate": 25.0
+    }
+  },
+  "8": {
+    "class_type": "EmptyLTXVLatentVideo",
+    "inputs": {
+      "width": 1280,
+      "height": 704,
+      "length": 2881,
+      "batch_size": 1
+    }
+  },
+  "9": {
+    "class_type": "ManualSigmas",
+    "inputs": {
+      "sigmas": "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0"
+    }
+  },
+  "10": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "11": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "7",
+        0
+      ],
+      "negative": [
+        "7",
+        1
+      ],
+      "cfg": 1.0
+    }
+  },
+  "12": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 424242
+    }
+  },
+  "13": {
+    "class_type": "LTXVLoopingSampler",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "noise": [
+        "12",
+        0
+      ],
+      "sampler": [
+        "10",
+        0
+      ],
+      "sigmas": [
+        "9",
+        0
+      ],
+      "guider": [
+        "11",
+        0
+      ],
+      "latents": [
+        "8",
+        0
+      ],
+      "temporal_tile_size": 96,
+      "temporal_overlap": 32,
+      "guiding_strength": 1.0,
+      "temporal_overlap_cond_strength": 0.5,
+      "cond_image_strength": 1.0,
+      "horizontal_tiles": 1,
+      "vertical_tiles": 1,
+      "spatial_overlap": 1,
+      "adain_factor": 0.15
+    }
+  },
+  "14": {
+    "class_type": "LTXVTiledVAEDecode",
+    "inputs": {
+      "vae": [
+        "1",
+        2
+      ],
+      "latents": [
+        "13",
+        0
+      ],
+      "horizontal_tiles": 1,
+      "vertical_tiles": 1,
+      "overlap": 1,
+      "last_frame_fix": false,
+      "working_device": "auto",
+      "working_dtype": "auto"
+    }
+  },
+  "15": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "14",
+        0
+      ],
+      "fps": 24.0
+    }
+  },
+  "16": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "15",
+        0
+      ],
+      "filename_prefix": "video/ltx_long_video",
+      "format": "mp4",
+      "codec": "h264"
+    }
+  }
+}
