@@ -166,6 +166,15 @@ public final class WebAuth {
         if (lower.startsWith("http://localhost") || lower.startsWith("https://localhost")) return true;
         if (lower.startsWith("http://127.") || lower.startsWith("https://127.")) return true;
         if (lower.startsWith("http://[::1]") || lower.startsWith("https://[::1]")) return true;
+        // Same-origin: the Origin's host:port equals the request's Host header. This is the standard CSRF
+        // check — it accepts any legitimate access path (SSH tunnel, hostname, LAN/VPN IP) while still
+        // rejecting a cross-site attacker, whose Origin host differs from our Host.
+        String host = ex.getRequestHeaders().getFirst("Host");
+        if (host != null && !host.isBlank()) {
+            int s = lower.indexOf("://");
+            String originHostPort = s >= 0 ? lower.substring(s + 3) : lower;
+            if (originHostPort.equalsIgnoreCase(host.trim())) return true;
+        }
         return false;
     }
 

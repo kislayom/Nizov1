@@ -7754,8 +7754,9 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
           (j.queuePos > 1 ? ' · #' + j.queuePos + ' in line' : '') + ' — waiting for the GPU…';
       } else if (j.status === 'running') {
         const p = j.progress || {}; const pct = p.total ? Math.round(100 * p.step / p.total) : 0;
-        if (st) st.innerHTML = '<span class="vidspin"></span> Rendering · step ' +
-          (p.step || 0) + '/' + (p.total || '?') + (p.total ? ' · ' + pct + '%' : '');
+        if (st) st.innerHTML = '<span class="vidspin"></span> ' + (p.total
+          ? ('Rendering · step ' + (p.step || 0) + '/' + p.total + ' · ' + pct + '%')
+          : 'Loading the model + starting the render…');
         if (fill) fill.style.width = pct + '%';
       } else if (j.status === 'done') { renderDone(card, j); loadGallery(); return; }
       else if (j.status === 'failed') { card.remove(); showErr('Generation failed: ' + (j.errorMessage || 'unknown')); return; }
@@ -7765,13 +7766,26 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
   async function loadGallery() {
     try {
       const d = await (await fetch('/api/video-jobs', { cache: 'no-store' })).json();
+      const jobs = d.jobs || [];
       galleryEl.innerHTML = '';
-      (d.jobs || []).filter(j => j.status === 'done' && j.url).forEach(j => {
+      jobs.filter(j => j.status === 'done' && j.url).forEach(j => {
         const cell = el('div', { class: 'video-cell' });
         cell.appendChild(el('video', { controls: '', src: j.url, preload: 'metadata' }));
         cell.appendChild(delBtn(j.jobId, cell));
         galleryEl.appendChild(cell);
       });
+      // Resume after a refresh: if a render is still queued/running and we're not already tracking one,
+      // re-attach to it so its progress + result come back instead of vanishing.
+      const active = jobs.find(j => j.status === 'running' || j.status === 'queued');
+      if (active && !busy) {
+        busy = true; genBtn.disabled = true;
+        resultEl.innerHTML = '';
+        const card = el('div', { class: 'video-result' });
+        card.appendChild(el('div', { class: 'video-status' }, el('span', { class: 'vidspin' }), ' Resuming your render…'));
+        card.appendChild(el('div', { class: 'vid-prog' }, el('div', { class: 'vid-prog-fill' })));
+        resultEl.appendChild(card);
+        pollJob(active.jobId, card).finally(() => { busy = false; genBtn.disabled = false; });
+      }
     } catch (e) { /* ignore */ }
   }
   window.__loadVideoGallery = loadGallery;
