@@ -1394,7 +1394,7 @@ _COMFY_MODELS = {
                 "width": [("9", "width")], "height": [("9", "height")], "length": [("9", "length")],
                 "seed": [("10", "noise_seed"), ("11", "noise_seed")]},
         "steps": 16, "neg": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量",
-        "frame_round": 16, "len_mul": 4, "len_add": 1, "def_frames": 49, "wan_split": True},
+        "frame_round": 16, "len_mul": 4, "len_add": 1, "def_frames": 49, "wan_split": True, "frame_cap": 81},
     # LTX-2.3 4K upscale ladder: base render → 2×(spatial x2 upsample + refine) → final = base×4.
     # Resolution tier sets the BASE size; node 8 width/height. Slow (~2.5 min). Short clips only.
     "ltx_4k": {
@@ -1442,15 +1442,12 @@ def _build_comfy_video_workflow(body):
     resolution = (body.get("resolution") or "720p").lower()
     frames_req = int(body.get("frames", 97))
 
-    if model in ("ltx23", "sulphur"):
-        if frames_req > 145:
-            cfg_key = "ltx_long"
-        elif resolution in ("1080p", "4k", "5k"):
-            cfg_key = "ltx_4k"
-        else:
-            cfg_key = model
+    if frames_req > 145:
+        cfg_key = "ltx_long"           # long video is LTX-only (temporal tiling) — Wan2.2 is single-shot
+    elif model in ("ltx23", "sulphur"):
+        cfg_key = "ltx_4k" if resolution in ("1080p", "4k", "5k") else model
     else:
-        cfg_key = model
+        cfg_key = model                # wan22 short clip
     if cfg_key == "ltx_4k" and (body.get("quality") or "").lower() == "max":
         cfg_key = "ltx_4k_hq"          # non-distilled dev model, 28 steps — sharper, much slower
     cfg = _COMFY_MODELS.get(cfg_key)
@@ -1480,7 +1477,9 @@ def _build_comfy_video_workflow(body):
         w = max(fr, (int(body.get("width", 1280)) // fr) * fr)
         h = max(fr, (int(body.get("height", 704)) // fr) * fr)
         final_w, final_h = w, h
-        frames = max(lm + la, ((frames_req - la) // lm) * lm + la)
+        cap = cfg.get("frame_cap")        # Wan2.2 OOMs past ~81 frames
+        req = min(frames_req, cap) if cap else frames_req
+        frames = max(lm + la, ((req - la) // lm) * lm + la)
 
     seed = int(body.get("seed", 424242))
     steps = int(body.get("steps", cfg.get("steps") or 8))

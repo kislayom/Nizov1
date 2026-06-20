@@ -3449,7 +3449,7 @@ window._loadPdfLibs = function () {
           <span class="qty" id="videoFramesLabel">4s</span>
         </div>
         <div class="control-row" style="font-size:12px;color:var(--md-on-surface-variant);">
-          ≤6s honors the resolution (4K upscale adds ~2 min). Over ~6s renders a long 720p clip via temporal tiling — up to 2 min (a full 2‑min clip ≈ 18 min). Wan2.2 = max fidelity, short + slow.
+          ≤6s honors the resolution (4K upscale adds ~2 min). Over ~6s → a long 720p clip via LTX temporal tiling, up to 2 min (full 2 min ≈ 18 min). Wan2.2 is max fidelity but <b>short only</b> — long always uses LTX automatically.
         </div>
       </div>
       <button class="music-compose-btn" id="videoGenBtn">🎬 Generate video</button>
