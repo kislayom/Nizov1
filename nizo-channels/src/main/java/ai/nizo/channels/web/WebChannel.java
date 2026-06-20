@@ -132,6 +132,8 @@ public final class WebChannel implements AutoCloseable {
         server.createContext("/api/music/jobs",       this::handleMusicJobs);       // list jobs OR get/delete by id
         server.createContext("/api/image",            this::handleImageGenerate);   // text->image proxy → sidecar /generate-image
         server.createContext("/api/video",            this::handleVideoGenerate);   // text->video proxy → sidecar /generate-video
+        server.createContext("/api/video-async",      this::handleVideoGenerateAsync); // queue a video job → sidecar
+        server.createContext("/api/video-jobs",       this::handleVideoJobs);       // list / get / DELETE video jobs
         server.createContext("/api/stock/history",    this::handleStockHistory);    // GET → list of past completed reports (single-user for now)
         server.createContext("/api/stock/report",     this::handleStockReport);     // GET /api/stock/report/{chatId} → full record; DELETE removes
         server.createContext("/api/stock/rerun-stage", this::handleStockRerunStage); // POST → re-run a single sub-skill (fundamentals, news, …) and patch the master report
@@ -1270,6 +1272,39 @@ public final class WebChannel implements AutoCloseable {
     /** POST /api/image — proxy to sidecar /generate-image (returns {ok, image_b64} JSON). */
     private void handleImageGenerate(HttpExchange ex) throws IOException {
         proxyGen(ex, "/generate-image", java.time.Duration.ofMinutes(6));
+    }
+
+    /** POST /api/video-async — queue a video job (returns {jobId,status,queuePos} immediately). */
+    private void handleVideoGenerateAsync(HttpExchange ex) throws IOException {
+        if (rejectIfUnauthenticated(ex)) return;
+        if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
+        byte[] body;
+        try (InputStream is = ex.getRequestBody()) { body = is.readAllBytes(); }
+        forwardJson(ex, "/generate-comfy-video-async", java.time.Duration.ofSeconds(15), body);
+    }
+
+    /** Video jobs — GET /api/video-jobs lists; GET /api/video-jobs/{id} for status+progress;
+     *  DELETE /api/video-jobs/{id} permanently removes the clip + job. Proxies the sidecar. */
+    private void handleVideoJobs(HttpExchange ex) throws IOException {
+        if (rejectIfUnauthenticated(ex)) return;
+        String tail = ex.getRequestURI().getPath().replaceFirst("^/api/video-jobs", "");
+        String method = ex.getRequestMethod().toUpperCase();
+        try {
+            String url = VOICE_BASE + "/video-jobs" + tail;
+            String qs = ex.getRequestURI().getQuery();
+            if (qs != null && !qs.isEmpty()) url += "?" + qs;
+            var rb = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+                    .timeout(java.time.Duration.ofSeconds(15));
+            if (method.equals("DELETE")) rb.DELETE();
+            java.net.http.HttpResponse<byte[]> r = VOICE_HTTP.send(rb.build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(r.statusCode(), r.body().length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(r.body()); }
+        } catch (Exception e) {
+            LOG.warn("/api/video-jobs proxy failed", e);
+            respondJson(ex, 502, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+        }
     }
 
     /** POST /api/video — route by the request's {@code model}: the ComfyUI "good" models (wan22 / ltx23 /

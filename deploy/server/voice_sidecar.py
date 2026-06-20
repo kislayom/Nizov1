@@ -1404,18 +1404,15 @@ def _patch_wf(wf, mapping, logical, val):
             wf[nid]["inputs"][key] = val
 
 
-@app.post("/generate-comfy-video")
-async def generate_comfy_video(body: dict = Body(...)):
-    import base64, json as _j, time as _time
-    from comfy_client import ComfyClient
+def _build_comfy_video_workflow(body):
+    """Load + patch the saved workflow for the requested model. Returns (workflow_dict, meta)."""
+    import json as _j
     model = (body.get("model") or "ltx23").strip()
     cfg = _COMFY_MODELS.get(model)
     if not cfg:
-        raise HTTPException(status_code=400, detail=f"unknown video model '{model}'")
-    prompt = (body.get("prompt") or "").strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
-
+        raise ValueError(f"unknown video model '{model}'")
+    if not (body.get("prompt") or "").strip():
+        raise ValueError("prompt is required")
     with open(os.path.join(_COMFY_WORKFLOWS, cfg["file"])) as f:
         wf = _j.load(f)
     m = cfg["map"]
@@ -1427,8 +1424,7 @@ async def generate_comfy_video(body: dict = Body(...)):
     frames = max(lm + la, ((frames - la) // lm) * lm + la)   # round to model's frame constraint
     seed = int(body.get("seed", 424242))
     steps = int(body.get("steps", cfg["steps"]))
-
-    _patch_wf(wf, m, "prompt", prompt)
+    _patch_wf(wf, m, "prompt", (body.get("prompt") or "").strip())
     _patch_wf(wf, m, "negative", (body.get("negative") or cfg["neg"]))
     _patch_wf(wf, m, "width", w); _patch_wf(wf, m, "height", h); _patch_wf(wf, m, "length", frames)
     _patch_wf(wf, m, "seed", seed)
@@ -1448,29 +1444,162 @@ async def generate_comfy_video(body: dict = Body(...)):
         for nid in cfg.get("ckpt_nodes", []):
             if nid in wf:
                 wf[nid]["inputs"]["ckpt_name"] = cfg["ckpt"]
+    return wf, {"model": model, "width": w, "height": h, "frames": frames, "steps": steps}
 
+
+def _render_comfy_video(wf, dst_path, on_progress=None):
+    """Render a video workflow under llama_paused(), saving the mp4 to dst_path. on_progress(step,total)
+    is called live if given. Removes the ComfyUI-side output copy so nothing accumulates. Returns secs."""
+    import time as _time, uuid as _uuid2
+    from comfy_client import ComfyClient
     c = ComfyClient()
+    cid = _uuid2.uuid4().hex
     t0 = _time.time()
+    timeout = int(os.environ.get("COMFY_VIDEO_TIMEOUT", "2400"))
     with llama_paused():
-        pid = c.queue(wf)
-        hist = c.wait(pid, timeout=int(os.environ.get("COMFY_VIDEO_TIMEOUT", "1800")))
+        if on_progress:
+            hist = c.run_with_progress(wf, cid, lambda v, mx, node: on_progress(v, mx), timeout=timeout)
+        else:
+            hist = c.wait(c.queue(wf), timeout=timeout)
         outs = c.outputs(hist)
         c.free()                          # release ComfyUI VRAM before Qwen reloads
     if not outs:
-        raise HTTPException(status_code=500, detail="ComfyUI produced no video output")
+        raise RuntimeError("ComfyUI produced no video output")
     fn, sub, typ = outs[0]
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    c.fetch(fn, sub, typ, dst_path)
+    try:                                  # delete ComfyUI's output copy — keep nothing in its cache
+        comfy_out = os.path.join("/mnt/ai-models/comfy/output", sub, fn)
+        if os.path.exists(comfy_out):
+            os.unlink(comfy_out)
+    except Exception:
+        pass
+    return round(_time.time() - t0, 1)
+
+
+@app.post("/generate-comfy-video")
+async def generate_comfy_video(body: dict = Body(...)):
+    """Synchronous render (agent tool / quick calls) → base64. The web UI uses the async queue below."""
+    import base64
+    try:
+        wf, meta = _build_comfy_video_workflow(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     fd, tmp = tempfile.mkstemp(suffix=".mp4"); os.close(fd)
     try:
-        c.fetch(fn, sub, typ, tmp)
+        secs = _render_comfy_video(wf, tmp)
         with open(tmp, "rb") as fh:
             b64 = base64.b64encode(fh.read()).decode("ascii")
     finally:
         try: os.unlink(tmp)
         except OSError: pass
-    secs = round(_time.time() - t0, 1)
-    log.info("comfy-video model=%s %dx%d frames=%d steps=%d -> %.1fs", model, w, h, frames, steps, secs)
-    return JSONResponse({"ok": True, "mime": "video/mp4", "video_b64": b64, "model": model,
-                         "width": w, "height": h, "frames": frames, "renderSec": secs})
+    log.info("comfy-video(sync) model=%s %dx%d frames=%d -> %.1fs",
+             meta["model"], meta["width"], meta["height"], meta["frames"], secs)
+    return JSONResponse({"ok": True, "mime": "video/mp4", "video_b64": b64, "renderSec": secs, **meta})
+
+
+# ── async video job queue — ONE GPU worker (ZeroGPU-style): submit returns a jobId; jobs queue and run
+#    one at a time when the GPU is free; live step progress; result saved to the Nizo workspace. ────────
+import queue as _vqueue
+_VIDEO_WORKSPACE_GEN = os.environ.get("NIZO_WORKSPACE_GEN", "/home/kislay/.nizo/workspace/gen")
+_video_q = _vqueue.Queue()
+_video_worker_lock = threading.Lock()
+_video_worker_started = False
+
+
+def _video_queue_positions():
+    return {jid: i + 1 for i, jid in enumerate(list(_video_q.queue))}
+
+
+def _video_worker_loop():
+    import time as _t
+    while True:
+        job_id = _video_q.get()
+        try:
+            body = (_read_job(job_id) or {}).get("params") or {}
+            _write_job(job_id, status="running", startedAt=int(_t.time()), progress={"step": 0, "total": 0})
+            wf, meta = _build_comfy_video_workflow(body)
+            fname = f"video-{job_id}.mp4"
+            dst = os.path.join(_VIDEO_WORKSPACE_GEN, fname)
+            secs = _render_comfy_video(wf, dst, on_progress=lambda step, total: _write_job(
+                job_id, progress={"step": step, "total": total}))
+            _write_job(job_id, status="done", file=f"gen/{fname}",
+                       url=f"/api/workspace/file?path=gen/{fname}", renderSec=secs, **meta)
+            log.info("comfy-video(job %s) model=%s %dx%d frames=%d -> %.1fs",
+                     job_id, meta["model"], meta["width"], meta["height"], meta["frames"], secs)
+        except Exception as e:
+            log.exception("video job %s failed", job_id)
+            _write_job(job_id, status="failed", errorMessage=str(e))
+        finally:
+            _video_q.task_done()
+
+
+def _ensure_video_worker():
+    global _video_worker_started
+    with _video_worker_lock:
+        if not _video_worker_started:
+            threading.Thread(target=_video_worker_loop, name="video-worker", daemon=True).start()
+            _video_worker_started = True
+
+
+@app.post("/generate-comfy-video-async")
+async def generate_comfy_video_async(body: dict = Body(...)):
+    import time as _t
+    if not (body.get("prompt") or "").strip():
+        raise HTTPException(status_code=400, detail="prompt is required")
+    job_id = _uuid.uuid4().hex[:12]
+    _write_job(job_id, status="queued", kind="video", model=(body.get("model") or "ltx23"),
+               prompt=(body.get("prompt") or "").strip(), params=body, createdAt=int(_t.time()),
+               progress={"step": 0, "total": 0})
+    _ensure_video_worker()
+    _video_q.put(job_id)
+    return {"jobId": job_id, "status": "queued", "queuePos": _video_queue_positions().get(job_id, 0)}
+
+
+@app.get("/video-jobs")
+def list_video_jobs():
+    rows = []
+    for r in _list_jobs(80):
+        j = _read_job(r["jobId"]) or {}
+        if j.get("kind") != "video":
+            continue
+        rows.append({k: j.get(k) for k in ("jobId", "status", "model", "prompt", "file", "url",
+                                           "renderSec", "width", "height", "frames", "createdAt")})
+    return {"jobs": rows}
+
+
+@app.get("/video-jobs/{job_id}")
+def get_video_job(job_id: str):
+    j = _read_job(job_id)
+    if not j or j.get("kind") != "video":
+        raise HTTPException(status_code=404, detail="job not found")
+    out = {k: j.get(k) for k in ("jobId", "status", "model", "prompt", "progress", "url", "file",
+                                 "renderSec", "width", "height", "frames", "errorMessage", "createdAt")}
+    if j.get("status") == "queued":
+        out["queuePos"] = _video_queue_positions().get(job_id, 0)
+    return out
+
+
+@app.delete("/video-jobs/{job_id}")
+def delete_video_job(job_id: str):
+    """Permanently delete a job's video: the workspace file, any ComfyUI residue, and the job record."""
+    j = _read_job(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="job not found")
+    removed = []
+    rel = j.get("file")
+    if rel:
+        wp = os.path.join(_VIDEO_WORKSPACE_GEN, os.path.basename(rel))
+        try:
+            if os.path.exists(wp):
+                os.unlink(wp); removed.append(os.path.basename(wp))
+        except Exception:
+            pass
+    try:
+        _job_path(job_id).unlink(missing_ok=True)
+    except Exception:
+        pass
+    return {"ok": True, "deleted": removed}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

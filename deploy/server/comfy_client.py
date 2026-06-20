@@ -31,9 +31,49 @@ class ComfyClient:
         """Full node catalogue — used to validate a workflow's node names before submitting."""
         return self._get("/object_info")
 
-    def queue(self, workflow):
+    def queue(self, workflow, client_id=None):
         """workflow: API-format dict {node_id: {class_type, inputs}}. Returns prompt_id."""
-        return self._post("/prompt", {"prompt": workflow})["prompt_id"]
+        payload = {"prompt": workflow}
+        if client_id:
+            payload["client_id"] = client_id
+        return self._post("/prompt", payload)["prompt_id"]
+
+    def run_with_progress(self, workflow, client_id, on_progress, timeout=1800):
+        """Queue the workflow and stream live sampler progress over the ComfyUI WebSocket, calling
+        on_progress(step, total, node) as it advances. Returns the /history entry once complete.
+        Best-effort: if the WS import/connection fails, falls back to a plain queue+poll (no steps)."""
+        import json as _json
+        try:
+            import websocket  # websocket-client
+        except Exception:
+            pid = self.queue(workflow, client_id=client_id)
+            return self.wait(pid, timeout=timeout)
+        ws_url = self.base.replace("http://", "ws://").replace("https://", "wss://") + "/ws?clientId=" + client_id
+        ws = websocket.create_connection(ws_url, timeout=15)
+        try:
+            pid = self.queue(workflow, client_id=client_id)
+            ws.settimeout(timeout)
+            while True:
+                raw = ws.recv()
+                if isinstance(raw, (bytes, bytearray)):
+                    continue  # binary preview frames — ignore
+                msg = _json.loads(raw)
+                mtype = msg.get("type")
+                data = msg.get("data") or {}
+                mpid = data.get("prompt_id")
+                if mtype == "progress" and mpid in (None, pid):
+                    try:
+                        on_progress(int(data.get("value", 0)), int(data.get("max", 0)), data.get("node"))
+                    except Exception:
+                        pass
+                elif mtype == "executing" and data.get("node") is None and mpid == pid:
+                    break  # this prompt finished
+                elif mtype == "execution_error" and mpid == pid:
+                    raise RuntimeError("comfy execution error: " + _json.dumps(data)[:400])
+        finally:
+            try: ws.close()
+            except Exception: pass
+        return self.wait(pid, timeout=60)
 
     def wait(self, prompt_id, timeout=1800, poll=2.0):
         t0 = time.time()

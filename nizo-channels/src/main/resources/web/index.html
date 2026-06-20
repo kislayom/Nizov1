@@ -598,6 +598,16 @@
   .video-result video { width: 100%; border-radius: 10px; display: block; background: #000; }
   .video-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
   .video-gallery video { width: 100%; border-radius: 10px; background: #000; }
+  .video-status { font-size: 13px; color: var(--md-on-surface-variant); margin-bottom: 10px; }
+  .video-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .video-meta { font-size: 13px; color: var(--md-on-surface-variant); }
+  .vid-prog { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.08); overflow: hidden; margin-bottom: 6px; }
+  .vid-prog-fill { height: 100%; width: 0%; background: var(--md-primary, #7aa2ff); transition: width 0.3s ease; }
+  .video-del { background: rgba(244,67,54,0.14); color: #f87171; border: 1px solid rgba(244,67,54,0.3);
+    border-radius: 8px; cursor: pointer; font-size: 13px; padding: 3px 9px; line-height: 1; }
+  .video-del:hover { background: rgba(244,67,54,0.26); }
+  .video-cell { position: relative; }
+  .video-cell .video-del { position: absolute; top: 8px; right: 8px; }
   .vidspin { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(255,255,255,0.25);
     border-top-color: var(--md-primary, #7aa2ff); border-radius: 50%; animation: vidspin 0.8s linear infinite;
     vertical-align: middle; margin-right: 8px; }
@@ -7658,6 +7668,9 @@ function setView(view) {
   if (view === 'india' && typeof loadIndiaPicks === 'function') {
     try { loadIndiaPicks(); } catch (e) { console.warn('india picks refresh failed', e); }
   }
+  if (view === 'video' && typeof window.__loadVideoGallery === 'function') {
+    try { window.__loadVideoGallery(); } catch (e) { console.warn('video gallery refresh failed', e); }
+  }
 }
 document.getElementById('viewTabChat').addEventListener('click',  () => setView('chat'));
 document.getElementById('viewTabStock').addEventListener('click', () => setView('stocks'));
@@ -7704,50 +7717,87 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
   const updFrames = () => { framesLabel.textContent = '~' + Math.max(1, Math.round(framesEl.value / 24)) + 's'; };
   framesEl.addEventListener('input', updFrames); updFrames();
   let busy = false;
+  const showErr = (t) => { errEl.style.display = 'block'; errEl.textContent = t; };
+
+  function delBtn(jobId, removeEl) {
+    return el('button', { class: 'video-del', title: 'Delete permanently', onclick: async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('Permanently delete this video? The file is removed and cannot be recovered.')) return;
+      try {
+        const r = await fetch('/api/video-jobs/' + jobId, { method: 'DELETE' });
+        if (r.ok) { if (removeEl) removeEl.remove(); loadGallery(); }
+        else showErr('Delete failed: HTTP ' + r.status);
+      } catch (e) { showErr('Delete failed: ' + e.message); }
+    } }, '🗑');
+  }
+
+  function renderDone(card, job) {
+    const url = job.url + '&cb=' + Date.now();
+    const meta = (job.width ? job.width + '×' + job.height + ' · ' : '') +
+      (job.renderSec ? Math.round(job.renderSec) + 's' : '') + (job.model ? ' · ' + job.model : '');
+    card.innerHTML = '';
+    card.appendChild(el('div', { class: 'video-card-head' },
+      el('span', { class: 'video-meta' }, '✅ ' + meta), delBtn(job.jobId, card)));
+    card.appendChild(el('video', { controls: '', src: url, preload: 'metadata', loop: '' }));
+    card.appendChild(el('a', { href: url, download: 'nizo-' + job.jobId + '.mp4', class: 'btn',
+      style: 'display:inline-block;margin-top:10px' }, '⬇ Download'));
+  }
+
+  async function pollJob(jobId, card) {
+    for (;;) {
+      await new Promise(r => setTimeout(r, 2000));
+      let j; try { j = await (await fetch('/api/video-jobs/' + jobId, { cache: 'no-store' })).json(); }
+      catch (e) { continue; }
+      const st = card.querySelector('.video-status'); const fill = card.querySelector('.vid-prog-fill');
+      if (j.status === 'queued') {
+        if (st) st.innerHTML = '<span class="vidspin"></span> Queued' +
+          (j.queuePos > 1 ? ' · #' + j.queuePos + ' in line' : '') + ' — waiting for the GPU…';
+      } else if (j.status === 'running') {
+        const p = j.progress || {}; const pct = p.total ? Math.round(100 * p.step / p.total) : 0;
+        if (st) st.innerHTML = '<span class="vidspin"></span> Rendering · step ' +
+          (p.step || 0) + '/' + (p.total || '?') + (p.total ? ' · ' + pct + '%' : '');
+        if (fill) fill.style.width = pct + '%';
+      } else if (j.status === 'done') { renderDone(card, j); loadGallery(); return; }
+      else if (j.status === 'failed') { card.remove(); showErr('Generation failed: ' + (j.errorMessage || 'unknown')); return; }
+    }
+  }
+
+  async function loadGallery() {
+    try {
+      const d = await (await fetch('/api/video-jobs', { cache: 'no-store' })).json();
+      galleryEl.innerHTML = '';
+      (d.jobs || []).filter(j => j.status === 'done' && j.url).forEach(j => {
+        const cell = el('div', { class: 'video-cell' });
+        cell.appendChild(el('video', { controls: '', src: j.url, preload: 'metadata' }));
+        cell.appendChild(delBtn(j.jobId, cell));
+        galleryEl.appendChild(cell);
+      });
+    } catch (e) { /* ignore */ }
+  }
+  window.__loadVideoGallery = loadGallery;
+  loadGallery();
+
   genBtn.addEventListener('click', async () => {
     if (busy) return;
-    if (window.__gpuBusy) {
-      errEl.style.display = 'block';
-      errEl.textContent = '🎮 GPU busy — another render is using the GPU. Try again when it frees up.';
-      return;
-    }
     const prompt = (promptEl.value || '').trim();
-    if (!prompt) { errEl.style.display = 'block'; errEl.textContent = 'Describe the video first.'; return; }
+    if (!prompt) { showErr('Describe the video first.'); return; }
     errEl.style.display = 'none'; busy = true; genBtn.disabled = true;
-    const t0 = Date.now();
     resultEl.innerHTML = '';
     const card = el('div', { class: 'video-result' });
-    const status = el('div', {}, '');
-    card.appendChild(status); resultEl.appendChild(card);
-    const tick = setInterval(() => {
-      status.innerHTML = '<span class="vidspin"></span> Generating ' + w + '×' + h + ' · ' +
-        framesLabel.textContent + ' … ' + Math.round((Date.now() - t0) / 1000) + 's (video is GPU-heavy, give it a minute)';
-    }, 250);
+    card.appendChild(el('div', { class: 'video-status' }, el('span', { class: 'vidspin' }), ' Queued…'));
+    card.appendChild(el('div', { class: 'vid-prog' }, el('div', { class: 'vid-prog-fill' })));
+    resultEl.appendChild(card);
     try {
-      const r = await fetch('/api/video', {
+      const r = await fetch('/api/video-async', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, width: w, height: h, frames: +framesEl.value, model }),
       });
-      clearInterval(tick);
-      if (!r.ok) { const tx = await r.text(); throw new Error('HTTP ' + r.status + ' ' + tx.slice(0, 200)); }
+      if (!r.ok) { const tx = await r.text(); throw new Error('HTTP ' + r.status + ' ' + tx.slice(0, 160)); }
       const d = await r.json();
-      const b64 = d.video_b64 || '';
-      if (!b64) throw new Error('renderer returned no video');
-      const bin = atob(b64); const arr = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-      const url = URL.createObjectURL(new Blob([arr], { type: d.mime || 'video/mp4' }));
-      const secs = Math.round((Date.now() - t0) / 1000);
-      card.innerHTML = '';
-      card.appendChild(el('div', { style: 'font-size:13px;color:var(--md-on-surface-variant);margin-bottom:8px' },
-        '✅ ' + w + '×' + h + ' · ' + framesLabel.textContent + ' · rendered in ' + secs + 's'));
-      card.appendChild(el('video', { controls: '', src: url, preload: 'metadata', autoplay: '', loop: '', muted: '' }));
-      card.appendChild(el('a', { href: url, download: 'nizo-video.mp4', class: 'btn',
-        style: 'display:inline-block;margin-top:10px' }, '⬇ Download'));
-      galleryEl.prepend(el('video', { controls: '', src: url, preload: 'metadata' }));
+      if (!d.jobId) throw new Error('no jobId returned');
+      await pollJob(d.jobId, card);
     } catch (e) {
-      clearInterval(tick);
-      resultEl.innerHTML = '';
-      errEl.style.display = 'block'; errEl.textContent = 'Generation failed: ' + e.message;
+      card.remove(); showErr('Could not start: ' + e.message);
     } finally {
       busy = false; genBtn.disabled = false;
     }
@@ -7770,8 +7820,8 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
         badge.textContent = '🎮 GPU busy' + (d.busy && d.reason === 'rendering' ? ' · rendering' : '');
         last = d.busy;
       }
-      const gb = document.getElementById('videoGenBtn');
-      if (gb) { gb.disabled = !!d.busy; gb.style.opacity = d.busy ? '0.6' : ''; }
+      // Note: we no longer disable the Video button when busy — the async queue accepts the job and
+      // runs it when the GPU frees (ZeroGPU-style). The badge alone signals the busy state.
     } catch (e) { /* keep last known state */ }
   }
   poll();
