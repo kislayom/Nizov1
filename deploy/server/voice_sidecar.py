@@ -427,6 +427,13 @@ def health():
     }
 
 
+@app.get("/busy")
+def busy():
+    """True while a heavy GPU gen (music / story / image / video) has Qwen paused for the GPU.
+    Nizo polls this to show a 'GPU busy' state instead of letting chat silently hang."""
+    return {"busy": _llama_paused_count > 0, "count": _llama_paused_count}
+
+
 KOKORO_VOICES = [
     # American female
     "af_bella", "af_nicole", "af_sarah", "af_alloy", "af_aoede",

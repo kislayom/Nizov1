@@ -602,6 +602,10 @@
     border-top-color: var(--md-primary, #7aa2ff); border-radius: 50%; animation: vidspin 0.8s linear infinite;
     vertical-align: middle; margin-right: 8px; }
   @keyframes vidspin { to { transform: rotate(360deg); } }
+  .gpu-busy-badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: var(--r-full, 999px);
+    background: rgba(245,158,11,0.16); color: #f59e0b; border: 1px solid rgba(245,158,11,0.35);
+    white-space: nowrap; animation: gpuPulse 1.6s ease-in-out infinite; }
+  @keyframes gpuPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 
   /* ── India Picks tab ─────────────────────────────────────────────────── */
   .india-view {
@@ -3039,6 +3043,7 @@ window._loadPdfLibs = function () {
   <span class="meta" id="metaModel">…</span>
   <span class="meta-divider"></span>
   <span class="meta" id="metaCounts"></span>
+  <span class="gpu-busy-badge" id="gpuBusyBadge" title="A render is using the GPU — chat resumes when it finishes" style="display:none">🎮 GPU busy</span>
 
   <!-- View switcher: Chat / Stocks. Body[data-view] toggles which content is visible. -->
   <span class="meta-divider"></span>
@@ -7701,6 +7706,11 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
   let busy = false;
   genBtn.addEventListener('click', async () => {
     if (busy) return;
+    if (window.__gpuBusy) {
+      errEl.style.display = 'block';
+      errEl.textContent = '🎮 GPU busy — another render is using the GPU. Try again when it frees up.';
+      return;
+    }
     const prompt = (promptEl.value || '').trim();
     if (!prompt) { errEl.style.display = 'block'; errEl.textContent = 'Describe the video first.'; return; }
     errEl.style.display = 'none'; busy = true; genBtn.disabled = true;
@@ -7742,6 +7752,30 @@ setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
       busy = false; genBtn.disabled = false;
     }
   });
+})();
+
+// ─────────── GPU busy indicator: poll /api/gpu-status, show the header badge + gate video gen ───────────
+(function initGpuBusyPoll() {
+  const badge = document.getElementById('gpuBusyBadge');
+  window.__gpuBusy = false;
+  let last = null;
+  async function poll() {
+    try {
+      const r = await fetch('/api/gpu-status', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      window.__gpuBusy = !!d.busy;
+      if (badge && d.busy !== last) {
+        badge.style.display = d.busy ? '' : 'none';
+        badge.textContent = '🎮 GPU busy' + (d.busy && d.reason === 'rendering' ? ' · rendering' : '');
+        last = d.busy;
+      }
+      const gb = document.getElementById('videoGenBtn');
+      if (gb) { gb.disabled = !!d.busy; gb.style.opacity = d.busy ? '0.6' : ''; }
+    } catch (e) { /* keep last known state */ }
+  }
+  poll();
+  setInterval(poll, 4000);
 })();
 
 /* ════════════════════════════════════════════════════════════════════════════

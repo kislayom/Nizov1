@@ -107,6 +107,7 @@ public final class WebChannel implements AutoCloseable {
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/api/health", this::handleHealth);
         server.createContext("/api/status", this::handleStatus);
+        server.createContext("/api/gpu-status", this::handleGpuStatus);   // {busy} — heavy gen / model paused
         server.createContext("/api/tools", this::handleTools);
         server.createContext("/api/skills", this::handleSkills);
         server.createContext("/api/sessions", this::handleSessions);  // matches /api/sessions and /api/sessions/...
@@ -1040,6 +1041,36 @@ public final class WebChannel implements AutoCloseable {
         } catch (Exception e) {
             respondJson(ex, 503, "{\"speakers\":[],\"languages\":[],\"error\":\"" + escape(e.getMessage()) + "\"}");
         }
+    }
+
+    private static final String LLM_BASE = System.getenv().getOrDefault("NIZO_LLM_URL", "http://localhost:8080");
+
+    /** GET /api/gpu-status → {"busy":bool,"reason":...}. Busy when a heavy gen (music/story/image/video)
+     *  has paused Qwen (sidecar /busy), OR the LLM endpoint is unreachable (GPU occupied / model paused).
+     *  Cheap, short timeouts, safe defaults so the UI can poll it every few seconds. No auth (read-only). */
+    private void handleGpuStatus(HttpExchange ex) throws IOException {
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
+        // 1) a sidecar heavy gen pausing Qwen for the GPU
+        try {
+            java.net.http.HttpResponse<String> r = VOICE_HTTP.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(VOICE_BASE + "/busy"))
+                            .timeout(java.time.Duration.ofMillis(1500)).GET().build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (r.statusCode() / 100 == 2 && r.body() != null
+                    && mapper.readTree(r.body()).path("busy").asBoolean(false)) {
+                respondJson(ex, 200, "{\"busy\":true,\"reason\":\"rendering\"}"); return;
+            }
+        } catch (Exception ignore) { /* sidecar down → fall through to the LLM probe */ }
+        // 2) is Qwen reachable? if not, the GPU is busy with something (or the model is paused)
+        boolean llmUp;
+        try {
+            java.net.http.HttpResponse<String> r = VOICE_HTTP.send(
+                    java.net.http.HttpRequest.newBuilder(java.net.URI.create(LLM_BASE + "/health"))
+                            .timeout(java.time.Duration.ofMillis(1500)).GET().build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            llmUp = r.statusCode() / 100 == 2;
+        } catch (Exception ignore) { llmUp = false; }
+        respondJson(ex, 200, llmUp ? "{\"busy\":false}" : "{\"busy\":true,\"reason\":\"model paused\"}");
     }
 
     private void handleVoiceHealth(HttpExchange ex) throws IOException {
