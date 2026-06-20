@@ -1450,11 +1450,15 @@ def _build_comfy_video_workflow(body):
         wf = _j.load(f)
     m = cfg["map"]
     lm, la = cfg["len_mul"], cfg["len_add"]
+    downscale = None
 
     if cfg_key == "ltx_4k":
-        base = {"1080p": (480, 256), "4k": (960, 512), "5k": (1280, 704)}.get(resolution, (960, 512))
-        w, h = base
-        final_w, final_h = w * 4, h * 4               # the ladder upsamples ×2 twice
+        # Always render the FULL-detail 720p base → LTX ×2→×2 ladder → 5120×2816 (genuine high-freq
+        # detail, per the worker's proof), then DOWNSCALE to the requested target. Supersampling a small
+        # base looked soft; a real base + downscale is sharp.
+        w, h = 1280, 704
+        final_w, final_h = 5120, 2816
+        downscale = {"1080p": (1920, 1080), "4k": (3840, 2160), "5k": None}.get(resolution)
         frames = max(lm + la, ((min(frames_req, 121) - la) // lm) * lm + la)   # 4K is costly → cap short
     elif cfg_key == "ltx_long":
         w, h = 1280, 704
@@ -1489,12 +1493,31 @@ def _build_comfy_video_workflow(body):
         for nid in cfg.get("ckpt_nodes", []):
             if nid in wf:
                 wf[nid]["inputs"]["ckpt_name"] = cfg["ckpt"]
-    return wf, {"model": model, "tier": cfg_key, "width": final_w, "height": final_h, "frames": frames, "steps": steps}
+    out_w, out_h = (downscale if downscale else (final_w, final_h))
+    return wf, {"model": model, "tier": cfg_key, "width": out_w, "height": out_h,
+                "frames": frames, "steps": steps, "downscale": downscale}
 
 
-def _render_comfy_video(wf, dst_path, on_progress=None):
+def _ffmpeg_downscale(path, w, h):
+    """Downscale a video to w×h with lanczos, in place. Supersampling a higher-res render down to the
+    target = sharp, detailed output (CRF 16 ≈ visually lossless)."""
+    tmp = path + ".ds.mp4"
+    cmd = ["ffmpeg", "-y", "-i", path, "-vf", f"scale={w}:{h}:flags=lanczos",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16", "-preset", "medium",
+           "-movflags", "+faststart", tmp]
+    try:
+        _subprocess.run(cmd, capture_output=True, timeout=600, check=True)
+        os.replace(tmp, path)
+    except Exception as e:
+        log.warning("ffmpeg downscale to %dx%d failed: %s", w, h, e)
+        try: os.unlink(tmp)
+        except OSError: pass
+
+
+def _render_comfy_video(wf, dst_path, on_progress=None, downscale=None):
     """Render a video workflow under llama_paused(), saving the mp4 to dst_path. on_progress(step,total)
-    is called live if given. Removes the ComfyUI-side output copy so nothing accumulates. Returns secs."""
+    is called live if given. downscale=(w,h) supersamples the render down to that target. Removes the
+    ComfyUI-side output copy so nothing accumulates. Returns secs."""
     import time as _time, uuid as _uuid2
     from comfy_client import ComfyClient
     c = ComfyClient()
@@ -1513,6 +1536,8 @@ def _render_comfy_video(wf, dst_path, on_progress=None):
     fn, sub, typ = outs[0]
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     c.fetch(fn, sub, typ, dst_path)
+    if downscale:
+        _ffmpeg_downscale(dst_path, downscale[0], downscale[1])
     try:                                  # delete ComfyUI's output copy — keep nothing in its cache
         comfy_out = os.path.join("/mnt/ai-models/comfy/output", sub, fn)
         if os.path.exists(comfy_out):
@@ -1532,7 +1557,7 @@ async def generate_comfy_video(body: dict = Body(...)):
         raise HTTPException(status_code=400, detail=str(e))
     fd, tmp = tempfile.mkstemp(suffix=".mp4"); os.close(fd)
     try:
-        secs = _render_comfy_video(wf, tmp)
+        secs = _render_comfy_video(wf, tmp, downscale=meta.get("downscale"))
         with open(tmp, "rb") as fh:
             b64 = base64.b64encode(fh.read()).decode("ascii")
     finally:
@@ -1566,8 +1591,9 @@ def _video_worker_loop():
             wf, meta = _build_comfy_video_workflow(body)
             fname = f"video-{job_id}.mp4"
             dst = os.path.join(_VIDEO_WORKSPACE_GEN, fname)
-            secs = _render_comfy_video(wf, dst, on_progress=lambda step, total: _write_job(
-                job_id, progress={"step": step, "total": total}))
+            secs = _render_comfy_video(wf, dst, downscale=meta.get("downscale"),
+                                       on_progress=lambda step, total: _write_job(
+                                           job_id, progress={"step": step, "total": total}))
             _write_job(job_id, status="done", file=f"gen/{fname}",
                        url=f"/api/workspace/file?path=gen/{fname}", renderSec=secs, **meta)
             log.info("comfy-video(job %s) model=%s %dx%d frames=%d -> %.1fs",
