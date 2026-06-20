@@ -608,6 +608,22 @@
   .video-del:hover { background: rgba(244,67,54,0.26); }
   .video-cell { position: relative; }
   .video-cell .video-del { position: absolute; top: 8px; right: 8px; }
+  body:not([data-view="library"]) .library-view { display: none !important; }
+  body[data-view="library"] #ctxBar,
+  body[data-view="library"] #log,
+  body[data-view="library"] form#composer { display: none !important; }
+  .library-view { padding: 28px 32px; max-width: 1100px; margin: 0 auto; width: 100%;
+    display: flex; flex-direction: column; gap: 22px; min-height: 0; overflow-y: auto; }
+  .lib-section-title { font-size: 15px; font-weight: 600; color: var(--md-on-surface); margin: 4px 0 2px; }
+  .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .lib-cell { position: relative; background: var(--md-surface-container, rgba(255,255,255,0.04));
+    border: 1px solid var(--md-outline-variant, rgba(255,255,255,0.10)); border-radius: 12px; padding: 8px;
+    display: flex; flex-direction: column; gap: 6px; }
+  .lib-cell img, .lib-cell video { width: 100%; border-radius: 8px; background: #000; display: block; }
+  .lib-cell audio { width: 100%; }
+  .lib-name { font-size: 11px; color: var(--md-on-surface-variant); word-break: break-all; }
+  .lib-cell .video-del { position: absolute; top: 6px; right: 6px; z-index: 2; }
+  .lib-empty { color: var(--md-on-surface-variant); font-size: 14px; text-align: center; padding: 40px 0; }
   .vidspin { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(255,255,255,0.25);
     border-top-color: var(--md-primary, #7aa2ff); border-radius: 50%; animation: vidspin 0.8s linear infinite;
     vertical-align: middle; margin-right: 8px; }
@@ -3063,6 +3079,7 @@ window._loadPdfLibs = function () {
     <button type="button" class="view-tab" id="viewTabIndia" role="tab" aria-selected="false" data-view="india">🇮🇳 India Picks</button>
     <button type="button" class="view-tab" id="viewTabMusic" role="tab" aria-selected="false" data-view="music">🎵 Music</button>
     <button type="button" class="view-tab" id="viewTabVideo" role="tab" aria-selected="false" data-view="video">🎬 Video</button>
+    <button type="button" class="view-tab" id="viewTabLibrary" role="tab" aria-selected="false" data-view="library">📚 Library</button>
     <button type="button" class="user-chip" id="userChip" title="Switch user">👤</button>
   </nav>
 
@@ -3441,6 +3458,18 @@ window._loadPdfLibs = function () {
       <div class="video-gallery" id="videoGallery"></div>
     </div>
 
+    <div class="library-view" id="libraryView">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div class="lib-section-title" style="font-size:18px;">📚 Media Library</div>
+        <button type="button" class="btn" id="libRefresh">↻ Refresh</button>
+      </div>
+      <div style="color:var(--md-on-surface-variant); font-size:13px; margin-top:-12px;">Everything Nizo has generated — images, videos and audio. Click 🗑 to delete permanently.</div>
+      <div id="libVideos"></div>
+      <div id="libImages"></div>
+      <div id="libAudio"></div>
+      <div class="lib-empty" id="libEmpty" style="display:none">Nothing generated yet. Make an image, video or story and it'll show up here.</div>
+    </div>
+
     <div id="log" aria-live="polite">
       <!-- Welcome / empty state — replaced as soon as the first message renders -->
       <div id="welcome" class="welcome">
@@ -3729,6 +3758,21 @@ const metaCountsEl = document.getElementById('metaCounts');
 
 // =================== utilities ===================
 function $(sel, root) { return (root || document).querySelector(sel); }
+// ── LAN / remote / phone access: the server only auto-installs the auth cookie for loopback requests,
+//    so over the LAN IP you get 401. A one-time ?token=<t> in the URL installs the nizo_token cookie
+//    (get it with: cat ~/.nizo/web-token → open http://<host>:7777/?token=<t>). Persists 30 days. ──
+(function tokenFromUrl() {
+  try {
+    const u = new URL(location.href);
+    const t = u.searchParams.get('token');
+    if (t) {
+      document.cookie = 'nizo_token=' + encodeURIComponent(t) + '; path=/; max-age=2592000; SameSite=Lax';
+      u.searchParams.delete('token');
+      history.replaceState(null, '', u.pathname + (u.search || '') + (u.hash || ''));
+      location.reload();
+    }
+  } catch (e) { /* ignore */ }
+})();
 function el(tag, attrs, ...children) {
   const e = document.createElement(tag);
   if (attrs) for (const [k, v] of Object.entries(attrs)) {
@@ -7650,7 +7694,7 @@ const STOCK_VIEW_KEY = 'nizo:view';
 const STOCK_CHAT_KEY = 'nizo:stock:chatId';
 
 function setView(view) {
-  if (view !== 'chat' && view !== 'stocks' && view !== 'music' && view !== 'india' && view !== 'video') view = 'chat';
+  if (!['chat', 'stocks', 'music', 'india', 'video', 'library'].includes(view)) view = 'chat';
   document.body.dataset.view = view;
   document.getElementById('viewTabChat').setAttribute('aria-selected',  view === 'chat'   ? 'true' : 'false');
   document.getElementById('viewTabStock').setAttribute('aria-selected', view === 'stocks' ? 'true' : 'false');
@@ -7660,6 +7704,8 @@ function setView(view) {
   if (musicTab) musicTab.setAttribute('aria-selected', view === 'music' ? 'true' : 'false');
   const videoTab = document.getElementById('viewTabVideo');
   if (videoTab) videoTab.setAttribute('aria-selected', view === 'video' ? 'true' : 'false');
+  const libraryTab = document.getElementById('viewTabLibrary');
+  if (libraryTab) libraryTab.setAttribute('aria-selected', view === 'library' ? 'true' : 'false');
   localStorage.setItem(STOCK_VIEW_KEY, view);
   // Refresh the cached library every time we land on the stocks tab.
   if (view === 'stocks' && typeof loadStockLibrary === 'function') {
@@ -7671,6 +7717,9 @@ function setView(view) {
   if (view === 'video' && typeof window.__loadVideoGallery === 'function') {
     try { window.__loadVideoGallery(); } catch (e) { console.warn('video gallery refresh failed', e); }
   }
+  if (view === 'library' && typeof window.__loadLibrary === 'function') {
+    try { window.__loadLibrary(); } catch (e) { console.warn('library refresh failed', e); }
+  }
 }
 document.getElementById('viewTabChat').addEventListener('click',  () => setView('chat'));
 document.getElementById('viewTabStock').addEventListener('click', () => setView('stocks'));
@@ -7680,6 +7729,60 @@ const __musicTabBtn = document.getElementById('viewTabMusic');
 if (__musicTabBtn) __musicTabBtn.addEventListener('click', () => setView('music'));
 const __videoTabBtn = document.getElementById('viewTabVideo');
 if (__videoTabBtn) __videoTabBtn.addEventListener('click', () => setView('video'));
+const __libTabBtn = document.getElementById('viewTabLibrary');
+if (__libTabBtn) __libTabBtn.addEventListener('click', () => setView('library'));
+
+// ── Library: unified gallery of every generated media file (image / video / audio) via /api/library ──
+(function initLibrary() {
+  const vWrap = document.getElementById('libVideos');
+  const iWrap = document.getElementById('libImages');
+  const aWrap = document.getElementById('libAudio');
+  const emptyEl = document.getElementById('libEmpty');
+  const refreshBtn = document.getElementById('libRefresh');
+  if (!vWrap) return;
+
+  async function delItem(name, cellEl) {
+    if (!confirm('Permanently delete ' + name + '? This cannot be undone.')) return;
+    try {
+      const r = await fetch('/api/workspace/file?path=gen/' + encodeURIComponent(name), { method: 'DELETE' });
+      if (r.ok) { if (cellEl) cellEl.remove(); load(); }
+      else alert('Delete failed: HTTP ' + r.status);
+    } catch (e) { alert('Delete failed: ' + e.message); }
+  }
+  const delBtn = (name, cellEl) => el('button', { class: 'video-del', title: 'Delete permanently',
+    onclick: (ev) => { ev.stopPropagation(); delItem(name, cellEl); } }, '🗑');
+
+  function section(wrap, title, items, render) {
+    wrap.innerHTML = '';
+    if (!items.length) return;
+    wrap.appendChild(el('div', { class: 'lib-section-title' }, title + ' (' + items.length + ')'));
+    const grid = el('div', { class: 'lib-grid' });
+    items.forEach((it) => {
+      const cell = el('div', { class: 'lib-cell' });
+      cell.appendChild(delBtn(it.name, cell));
+      cell.appendChild(render(it));
+      cell.appendChild(el('div', { class: 'lib-name' }, it.name));
+      grid.appendChild(cell);
+    });
+    wrap.appendChild(grid);
+  }
+
+  async function load() {
+    try {
+      const d = await (await fetch('/api/library', { cache: 'no-store' })).json();
+      const items = d.items || [];
+      section(vWrap, '🎬 Videos', items.filter((x) => x.type === 'video'),
+        (it) => el('video', { src: it.url, controls: '', preload: 'metadata' }));
+      section(iWrap, '🖼 Images', items.filter((x) => x.type === 'image'),
+        (it) => el('img', { src: it.url, loading: 'lazy' }));
+      section(aWrap, '🎵 Audio', items.filter((x) => x.type === 'audio'),
+        (it) => el('audio', { src: it.url, controls: '', preload: 'metadata' }));
+      if (emptyEl) emptyEl.style.display = items.length ? 'none' : '';
+    } catch (e) { console.warn('library load failed', e); }
+  }
+  window.__loadLibrary = load;
+  if (refreshBtn) refreshBtn.addEventListener('click', load);
+})();
 setView(localStorage.getItem(STOCK_VIEW_KEY) || 'chat');
 
 // ─────────── Video studio: prompt → /api/video (LTX-Video) → inline player + gallery ───────────

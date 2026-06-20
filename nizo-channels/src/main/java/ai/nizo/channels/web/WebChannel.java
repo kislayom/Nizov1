@@ -112,6 +112,7 @@ public final class WebChannel implements AutoCloseable {
         server.createContext("/api/skills", this::handleSkills);
         server.createContext("/api/sessions", this::handleSessions);  // matches /api/sessions and /api/sessions/...
         server.createContext("/api/workspace/file", this::handleWorkspaceFile);
+        server.createContext("/api/library", this::handleLibrary);   // all generated media, categorized
         server.createContext("/api/workspace", this::handleWorkspace);
         server.createContext("/api/chat/stream", this::handleChatStream);
         server.createContext("/api/chat/condense", this::handleChatCondense);
@@ -372,11 +373,49 @@ public final class WebChannel implements AutoCloseable {
      * anything that escapes (symlinks, {@code ..}, absolute paths). Streams the bytes via
      * {@link Files#copy} — never loads the whole file into memory.
      */
+    /** GET /api/library — every generated media file in workspace/gen, newest first, categorized
+     *  image / video / audio with {name,type,url,size,mtime}. Backs the unified Library tab. */
+    private void handleLibrary(HttpExchange ex) throws IOException {
+        if (rejectIfUnauthenticated(ex)) return;
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
+        if (ctx == null) { respondJson(ex, 501, "{\"error\":\"context not wired\"}"); return; }
+        Path gen = ctx.workspaceDir().resolve("gen");
+        List<Map<String, Object>> items = new ArrayList<>();
+        if (Files.isDirectory(gen)) {
+            try (var stream = Files.list(gen)) {
+                stream.filter(Files::isRegularFile).forEach(p -> {
+                    String name = p.getFileName().toString();
+                    int dot = name.lastIndexOf('.');
+                    String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : "";
+                    String type = switch (ext) {
+                        case "png", "jpg", "jpeg", "gif", "webp", "svg" -> "image";
+                        case "mp4", "webm", "mov" -> "video";
+                        case "mp3", "wav", "ogg", "m4a", "flac" -> "audio";
+                        default -> null;
+                    };
+                    if (type == null) return;
+                    long size = 0, mtime = 0;
+                    try { size = Files.size(p); mtime = Files.getLastModifiedTime(p).toMillis(); } catch (IOException ignore) { }
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", name);
+                    m.put("type", type);
+                    m.put("url", "/api/workspace/file?path=gen/" + name);
+                    m.put("size", size);
+                    m.put("mtime", mtime);
+                    items.add(m);
+                });
+            }
+        }
+        items.sort((a, b) -> Long.compare((Long) b.get("mtime"), (Long) a.get("mtime")));
+        respondJson(ex, 200, mapper.writeValueAsString(Map.of("items", items)));
+    }
+
     private void handleWorkspaceFile(HttpExchange ex) throws IOException {
         if (rejectIfUnauthenticated(ex)) return;
         if (ctx == null) { respondJson(ex, 501, "{\"error\":\"context not wired\"}"); return; }
         boolean head = "HEAD".equalsIgnoreCase(ex.getRequestMethod());
-        if (!head && !"GET".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
+        boolean del = "DELETE".equalsIgnoreCase(ex.getRequestMethod());
+        if (!head && !del && !"GET".equalsIgnoreCase(ex.getRequestMethod())) { respondText(ex, 405, "method not allowed"); return; }
 
         String relPath = "";
         String q = ex.getRequestURI().getRawQuery();
@@ -393,6 +432,15 @@ public final class WebChannel implements AutoCloseable {
         Path root = ctx.workspaceDir().toAbsolutePath().normalize();
         Path target = root.resolve(relPath).normalize();
         if (!target.startsWith(root)) { respondJson(ex, 400, "{\"error\":\"path escapes workspace\"}"); return; }
+        if (del) {   // permanently delete a generated file (library / per-clip delete) — idempotent
+            try {
+                boolean removed = Files.deleteIfExists(target);
+                respondJson(ex, 200, "{\"ok\":true,\"deleted\":" + removed + "}");
+            } catch (IOException e) {
+                respondJson(ex, 500, "{\"error\":\"" + escape(e.getMessage()) + "\"}");
+            }
+            return;
+        }
         if (!Files.exists(target))    { respondJson(ex, 404, "{\"error\":\"not found\"}"); return; }
         if (!Files.isRegularFile(target)) {
             respondJson(ex, 400, "{\"error\":\"not a regular file\"}");
